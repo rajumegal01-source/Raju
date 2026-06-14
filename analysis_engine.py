@@ -4,7 +4,7 @@ import pandas_ta as ta
 def calculate_indicators(df):
     """Calculates multiple technical indicators."""
     # Ensure dataframe is not too small
-    if len(df) < 20:
+    if len(df) < 30:
         return df
 
     # RSI
@@ -46,20 +46,32 @@ def detect_support_resistance(df, window=20):
 
 def get_binary_signal(df):
     """Generate a simple Binary Option signal based on indicators."""
-    if df.empty:
+    if df.empty or 'RSI_14' not in df.columns:
         return "NEUTRAL"
 
     latest = df.iloc[-1]
+    prev = df.iloc[-2]
 
-    # Simple strategy: RSI + BBands
-    rsi = latest.get('RSI_14')
-    bb_lower = latest.get('BBL_20_2.0')
-    bb_upper = latest.get('BBU_20_2.0')
+    rsi = latest['RSI_14']
+    bb_lower = latest['BBL_20_2.0']
+    bb_upper = latest['BBU_20_2.0']
+    ema9 = latest['EMA_9']
+    ema21 = latest['EMA_21']
     close = latest['close']
 
-    if rsi is not None and bb_lower is not None and close < bb_lower and rsi < 30:
-        return "CALL (BUY) - Oversold"
-    elif rsi is not None and bb_upper is not None and close > bb_upper and rsi > 70:
-        return "PUT (SELL) - Overbought"
+    # Buy Signal: RSI Oversold + BB Lower Break + EMA Bullish Cross or Close > EMA9
+    if rsi < 35 and close < bb_lower and close > ema9:
+        return "CALL (BUY) - Oversold Recovery"
+
+    # Sell Signal: RSI Overbought + BB Upper Break + Close < EMA9
+    elif rsi > 65 and close > bb_upper and close < ema9:
+        return "PUT (SELL) - Overbought Reversal"
+
+    # Trend Following: EMA Cross
+    elif ema9 > ema21 and prev['EMA_9'] <= prev['EMA_21']:
+        return "CALL (BUY) - Bullish EMA Cross"
+    elif ema9 < ema21 and prev['EMA_9'] >= prev['EMA_21']:
+        return "PUT (SELL) - Bearish EMA Cross"
+
     else:
         return "NEUTRAL"

@@ -4,11 +4,14 @@ import yfinance as yf
 import httpx
 import sys
 import pandas as pd
+import asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from dotenv import load_dotenv
 from twelvedata import TDClient
 import analysis_engine
+import google.generativeai as genai
+from groq import AsyncGroq
 
 # Load environment variables
 load_dotenv()
@@ -16,8 +19,13 @@ load_dotenv()
 # Configuration
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY")
+
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Enable logging
 logging.basicConfig(
@@ -31,11 +39,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "I provide high-precision signals and AI analysis for Forex, Crypto, and Metals.\n\n"
         "📊 **Commands:**\n"
         "/price <ticker> - Get real-time price\n"
-        "/analyze <ticker> - AI Market Analysis\n"
-        "/signal <ticker> <timeframe> - Get Binary Option Signal (1m, 2m, 3m, 5m)\n\n"
+        "/analyze <ticker> <provider> - AI Market Analysis (deepseek, gemini, groq, openrouter)\n"
+        "/signal <ticker> <timeframe> - Get Binary Option Signal (1min, 5min)\n\n"
         "💡 **Examples:**\n"
         "• Binary Signal: `/signal EUR/USD 1min`\n"
-        "• Crypto Signal: `/signal BTC/USD 5min`\n"
+        "• AI Analysis: `/analyze BTC/USD gemini`\n"
         "• Gold Price: `/price GC=F`\n"
     )
     await context.bot.send_message(
@@ -65,21 +73,17 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not TWELVEDATA_API_KEY:
-        await update.message.reply_text("Twelve Data API Key is missing. Check your .env file.")
+        await update.message.reply_text("Twelve Data API Key is missing.")
         return
 
     if len(context.args) < 1:
-        await update.message.reply_text("Usage: /signal <ticker> [timeframe]\nExample: /signal EUR/USD 1min")
+        await update.message.reply_text("Usage: /signal <ticker> [timeframe]")
         return
 
     symbol = context.args[0].upper()
     interval = context.args[1] if len(context.args) > 1 else "1min"
 
-    if interval not in ["1min", "2min", "3min", "5min", "15min", "30min", "45min", "1h"]:
-        await update.message.reply_text("Invalid timeframe. Supported: 1min, 2min, 3min, 5min, etc.")
-        return
-
-    await update.message.reply_text(f"Generating signal for {symbol} on {interval} timeframe...")
+    await update.message.reply_text(f"Generating signal for {symbol} on {interval}...")
 
     try:
         td = TDClient(apikey=TWELVEDATA_API_KEY)
@@ -87,79 +91,92 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         df = ts.as_pd()
 
         if df.empty:
-            await update.message.reply_text("Could not fetch data for this symbol.")
+            await update.message.reply_text("Could not fetch data.")
             return
 
-        # Prepare data for analysis_engine (it expects lowercase columns usually or specific names)
+        # Correct data ordering: newest last
+        df = df.iloc[::-1]
+
         df.columns = [c.lower() for c in df.columns]
         df = analysis_engine.calculate_indicators(df)
         supports, resistances = analysis_engine.detect_support_resistance(df)
         binary_call = analysis_engine.get_binary_signal(df)
 
-        latest_price = df.iloc[-1]['close']
-
         response = (
             f"🎯 **SIGNAL: {symbol} ({interval})**\n"
-            f"💰 Price: {latest_price:.5f}\n\n"
+            f"💰 Price: {df.iloc[-1]['close']:.5f}\n\n"
             f"💹 **Direction: {binary_call}**\n\n"
             f"🧱 Support: {', '.join([str(s) for s in supports])}\n"
             f"🚀 Resistance: {', '.join([str(r) for r in resistances])}\n"
-            f"📈 RSI: {df.iloc[-1].get('RSI_14', 'N/A'):.2f}"
         )
         await update.message.reply_text(response, parse_mode='Markdown')
 
     except Exception as e:
-        logging.error(f"Signal Error: {e}")
-        await update.message.reply_text(f"Error generating signal: {e}")
+        await update.message.reply_text(f"Signal Error: {e}")
 
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not DEEPSEEK_API_KEY:
-        await update.message.reply_text("DeepSeek API Key is missing.")
-        return
-
-    if not context.args:
-        await update.message.reply_text("Usage: /analyze <ticker>")
+    if len(context.args) < 1:
+        await update.message.reply_text("Usage: /analyze <ticker> [provider]")
         return
 
     symbol = context.args[0].upper()
-    await update.message.reply_text(f"Analyzing {symbol}... please wait.")
+    provider = context.args[1].lower() if len(context.args) > 1 else "deepseek"
+
+    await update.message.reply_text(f"Analyzing {symbol} using {provider}... please wait.")
 
     try:
-        # Get data from Twelve Data for more accuracy if available, else yf
+        # Get data
         if TWELVEDATA_API_KEY:
             td = TDClient(apikey=TWELVEDATA_API_KEY)
-            ts = td.time_series(symbol=symbol, interval="5min", outputsize=50)
+            ts = td.time_series(symbol=symbol, interval="5min", outputsize=20)
             df = ts.as_pd()
-            data_source = "Twelve Data"
+            df = df.iloc[::-1] # Ascending order
         else:
             ticker = yf.Ticker(symbol)
             df = ticker.history(period="1d", interval="5m")
-            data_source = "Yahoo Finance"
 
         if df.empty:
             await update.message.reply_text("Could not find data for analysis.")
             return
 
-        # Technical context
-        latest_price = df.iloc[-1]['Close'] if 'Close' in df.columns else df.iloc[-1]['close']
+        market_data = df.tail(10).to_string()
+        prompt = f"Analyze the following 5-minute market data for {symbol} and provide a Binary Options trading recommendation (CALL/PUT/NEUTRAL):\n{market_data}"
 
-        headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
-        data = {
-            "model": "deepseek-chat",
-            "messages": [
-                {"role": "system", "content": "You are an expert binary options analyst. Analyze the market data and provide a concise summary and binary option sentiment."},
-                {"role": "user", "content": f"Symbol: {symbol}\nPrice: {latest_price}\nData from {data_source}:\n{df.tail(10).to_string()}"}
-            ]
-        }
+        analysis = "Provider not configured or unavailable."
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(DEEPSEEK_API_URL, headers=headers, json=data, timeout=30.0)
+        if provider == "deepseek" and DEEPSEEK_API_KEY:
+            headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+            data = {"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}]}
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(DEEPSEEK_API_URL, headers=headers, json=data, timeout=30.0)
+            if resp.status_code == 200:
+                analysis = resp.json()['choices'][0]['message']['content']
 
-        if resp.status_code == 200:
-            analysis = resp.json()['choices'][0]['message']['content']
-            await update.message.reply_text(f"🤖 **AI Analysis for {symbol}:**\n\n{analysis}")
-        else:
-            await update.message.reply_text(f"AI Error: {resp.status_code}")
+        elif provider == "gemini" and GEMINI_API_KEY:
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-pro')
+            # Run blocking call in executor
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, lambda: model.generate_content(prompt))
+            analysis = response.text
+
+        elif provider == "groq" and GROQ_API_KEY:
+            client = AsyncGroq(api_key=GROQ_API_KEY)
+            chat_completion = await client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="mixtral-8x7b-32768",
+            )
+            analysis = chat_completion.choices[0].message.content
+
+        elif provider == "openrouter" and OPENROUTER_API_KEY:
+            headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"}
+            data = {"model": "openai/gpt-3.5-turbo", "messages": [{"role": "user", "content": prompt}]}
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(OPENROUTER_API_URL, headers=headers, json=data, timeout=30.0)
+            if resp.status_code == 200:
+                analysis = resp.json()['choices'][0]['message']['content']
+
+        await update.message.reply_text(f"🤖 **{provider.upper()} Analysis for {symbol}:**\n\n{analysis}")
 
     except Exception as e:
         await update.message.reply_text(f"Analysis Error: {e}")
@@ -176,5 +193,5 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('signal', signal))
     application.add_handler(CommandHandler('analyze', analyze))
 
-    print("Binary Option Bot started...")
+    print("Final Binary Option Bot started...")
     application.run_polling()
