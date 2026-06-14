@@ -1,0 +1,15 @@
+//@version=5
+indicator("EMA 7 & 27", overlay=true, shorttitle="EMA 7/27")
+
+// Inputs
+src = input(close, title="Source")
+len7 = input.int(7, title="EMA 7 Length")
+len27 = input.int(27, title="EMA 27 Length")
+
+// Calculations
+ema7 = ta.ema(src, len7)
+ema27 = ta.ema(src, len27)
+
+// Plotting
+plot(ema7, title="EMA 7", color=color.white, linewidth=2)
+plot(ema27, title="EMA 27", color=color.fuchsia, linewidth=2)
