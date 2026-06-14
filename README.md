@@ -2,6 +2,8 @@
 
 A high-performance Telegram bot for Binary Options (Forex, Crypto, Gold) with multi-AI analysis. Optimized for speed and reliability.
 
+👉 **[READ THE STEP-BY-STEP GUIDE](GUIDE.md)**
+
 ## Features
 
 - **Multi-AI Analysis**: DeepSeek, Gemini, Groq, and OpenRouter.
