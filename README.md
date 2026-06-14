@@ -1,19 +1,21 @@
-# Telegram AI Trading Bot
+# Binary Option AI Trading Bot
 
-A Telegram bot that provides real-time stock prices and AI-powered market analysis using DeepSeek.
+A sophisticated Telegram bot providing real-time technical analysis and signals for Binary Options trading (Forex, Crypto, Gold).
 
 ## Features
 
-- `/start`: Welcome message and list of commands.
-- `/price <ticker>`: Get the current price of an asset.
-- `/analyze <ticker>`: Get AI-powered sentiment and analysis for an asset.
+- **Signal Generation**: Get high-precision CALL/PUT signals for multiple timeframes (1m, 2m, 3m, 5m).
+- **Technical Indicators**: Uses RSI, Bollinger Bands, EMA, and MACD.
+- **Support & Resistance**: Automatic detection of key market levels.
+- **AI Analysis**: DeepSeek AI-powered market sentiment and detailed analysis.
+- **Multi-Source Data**: Supports Twelve Data, Alpha Vantage, and Yahoo Finance.
 
-## Asset Examples
+## Commands
 
-- **Bitcoin (USD)**: `/price BTC-USD`
-- **Forex (EUR/USD)**: `/price EURUSD=X`
-- **Gold (Futures)**: `/price GC=F`
-- **Stocks (Apple)**: `/price AAPL`
+- `/start`: Interactive help and command list.
+- `/price <ticker>`: Real-time price (e.g., `/price EUR/USD`).
+- `/signal <ticker> <timeframe>`: Binary Option signal (e.g., `/signal BTC/USD 1min`).
+- `/analyze <ticker>`: AI-powered market deep-dive.
 
 ## Setup
 
@@ -22,20 +24,21 @@ A Telegram bot that provides real-time stock prices and AI-powered market analys
    pip install -r requirements.txt
    ```
 
-2. **Configure Environment Variables**:
-   Copy `.env.example` to `.env` and fill in your API keys:
-   - `TELEGRAM_BOT_TOKEN`: Get this from [@BotFather](https://t.me/BotFather) on Telegram.
-   - `DEEPSEEK_API_KEY`: Get this from the DeepSeek API portal.
+2. **Configuration**:
+   Create a `.env` file from `.env.example` and add your API keys:
+   - `TELEGRAM_BOT_TOKEN`: From BotFather.
+   - `DEEPSEEK_API_KEY`: For AI Analysis.
+   - `TWELVEDATA_API_KEY`: High-precision intraday data (Recommended).
+   - `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`: Optional AI providers.
 
-3. **Run the Bot**:
+3. **Run**:
    ```bash
    python trading_bot.py
    ```
 
-## Development
+## Binary Options Strategy
 
-The bot uses:
-- `python-telegram-bot` for the Telegram interface (asynchronous).
-- `yfinance` for fetching market data.
-- `httpx` for asynchronous requests to the DeepSeek API.
-- `python-dotenv` for managing environment variables.
+The bot utilizes a combined strategy:
+1. **Mean Reversion**: Uses Bollinger Bands to identify overextended price moves.
+2. **Momentum**: RSI filter to confirm oversold/overbought conditions.
+3. **Price Action**: Support and Resistance level validation.
