@@ -1,0 +1,10 @@
+python-telegram-bot
+yfinance
+httpx
+python-dotenv
+twelvedata
+google-generativeai
+groq
+pandas-ta
+alpha_vantage
+pandas
