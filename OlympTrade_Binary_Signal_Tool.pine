@@ -1,4 +1,4 @@
-//@version=6
+//@version=5
 indicator("OlympTrade Binary Signal Tool [Premium]", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
 
 // ==========================================
@@ -91,7 +91,7 @@ atr = ta.atr(atrLen)
 // ==========================================
 
 volAvg = ta.sma(volume, 20)
-volSpike = volume > volAvg * 1.5
+volSpike = volume > volAvg * 1.2
 volBullish = close > open and volume > volAvg
 volBearish = close < open and volume > volAvg
 
@@ -100,8 +100,8 @@ volBearish = close < open and volume > volAvg
 // ==========================================
 
 // --- Pivot Points ---
-var int leftBars = 5
-var int rightBars = 5
+leftBars = 5
+rightBars = 5
 pivotHigh = ta.pivothigh(high, leftBars, rightBars)
 pivotLow = ta.pivotlow(low, leftBars, rightBars)
 
@@ -111,37 +111,52 @@ var bool bosBullish = false
 var bool bosBearish = false
 var bool chochBullish = false
 var bool chochBearish = false
-
-// CHOCH logic (Change of Character): first break of opposite structure
 var bool trendIsBullish = true
 
 if not na(pivotHigh)
-    if high[rightBars] > lastPivotHigh
-        if trendIsBullish == false
-            chochBullish := true
-            trendIsBullish := true
-            bosBullish := false
-        else
-            bosBullish := true
-            chochBullish := false
+    isNewHigh = lastPivotHigh > 0 and high[rightBars] > lastPivotHigh
+    if isNewHigh and not trendIsBullish
+        chochBullish := true
+        trendIsBullish := true
+        bosBullish := false
+    else if isNewHigh and trendIsBullish
+        bosBullish := true
+        chochBullish := false
     else
         bosBullish := false
         chochBullish := false
     lastPivotHigh := high[rightBars]
+else
+    chochBullish := false
+    bosBullish := false
 
 if not na(pivotLow)
-    if low[rightBars] < lastPivotLow
-        if trendIsBullish == true
-            chochBearish := true
-            trendIsBullish := false
-            bosBearish := false
-        else
-            bosBearish := true
-            chochBearish := false
+    isNewLow = lastPivotLow > 0 and low[rightBars] < lastPivotLow
+    if isNewLow and trendIsBullish
+        chochBearish := true
+        trendIsBullish := false
+        bosBearish := false
+    else if isNewLow and not trendIsBullish
+        bosBearish := true
+        chochBearish := false
     else
         bosBearish := false
         chochBearish := false
     lastPivotLow := low[rightBars]
+else
+    chochBearish := false
+    bosBearish := false
+
+// --- Persistent BOS Flags ---
+var int lastBOSBullBar = 0
+var int lastBOSBearBar = 0
+if bosBullish
+    lastBOSBullBar := bar_index
+if bosBearish
+    lastBOSBearBar := bar_index
+
+isBOSBullConfirmed = (bar_index - lastBOSBullBar) < 20
+isBOSBearConfirmed = (bar_index - lastBOSBearBar) < 20
 
 // --- Liquidity Sweep ---
 liqSweepBull = low < ta.lowest(low, 20)[1] and close > ta.lowest(low, 20)[1]
@@ -158,19 +173,20 @@ fvgBearish = high < low[2] and close[1] < low[2]
 // --- Dynamic Support & Resistance ---
 highRes = ta.highest(high, 50)
 lowSup = ta.lowest(low, 50)
-nearSupport = close <= lowSup * 1.01
-nearResistance = close >= highRes * 0.99
+nearSupport = close <= lowSup * 1.02
+nearResistance = close >= highRes * 0.98
 
 // ==========================================
 // AI SCORING ENGINE
 // ==========================================
 
 // --- Trend Score (25%) ---
-trendScore = 0.0
-trendScore += (close > ema200 ? 5.0 : 0.0)
-trendScore += (ema20 > ema50 ? 5.0 : 0.0)
-trendScore += (stBullish ? 10.0 : 0.0)
-trendScore += (adxStrong ? 5.0 : 0.0)
+trendScoreBull = 0.0
+trendScoreBull += (close > ema200 ? 5.0 : 0.0)
+trendScoreBull += (ema20 > ema50 ? 5.0 : 0.0)
+trendScoreBull += (stBullish ? 10.0 : 0.0)
+trendScoreBull += (adxStrong ? 5.0 : 0.0)
+
 trendScoreBear = 0.0
 trendScoreBear += (close < ema200 ? 5.0 : 0.0)
 trendScoreBear += (ema20 < ema50 ? 5.0 : 0.0)
@@ -178,12 +194,13 @@ trendScoreBear += (not stBullish ? 10.0 : 0.0)
 trendScoreBear += (adxStrong ? 5.0 : 0.0)
 
 // --- Momentum Score (25%) ---
-momScore = 0.0
-momScore += (rsi > 50 ? 5.0 : 0.0)
-momScore += (stochKVal > stochDVal ? 5.0 : 0.0)
-momScore += (macdLine > signalLine ? 5.0 : 0.0)
-momScore += (cci > 0 ? 5.0 : 0.0)
-momScore += (wpr > -50 ? 5.0 : 0.0)
+momScoreBull = 0.0
+momScoreBull += (rsi > 50 ? 5.0 : 0.0)
+momScoreBull += (stochKVal > stochDVal ? 5.0 : 0.0)
+momScoreBull += (macdLine > signalLine ? 5.0 : 0.0)
+momScoreBull += (cci > 0 ? 5.0 : 0.0)
+momScoreBull += (wpr > -50 ? 5.0 : 0.0)
+
 momScoreBear = 0.0
 momScoreBear += (rsi < 50 ? 5.0 : 0.0)
 momScoreBear += (stochKVal < stochDVal ? 5.0 : 0.0)
@@ -192,35 +209,38 @@ momScoreBear += (cci < 0 ? 5.0 : 0.0)
 momScoreBear += (wpr < -50 ? 5.0 : 0.0)
 
 // --- SMC Score (20%) ---
-smcScore = 0.0
-smcScore += (bosBullish ? 5.0 : 0.0)
-smcScore += (chochBullish ? 5.0 : 0.0)
-smcScore += (liqSweepBull ? 5.0 : 0.0)
-smcScore += (isOBBullish ? 2.5 : 0.0)
-smcScore += (fvgBullish ? 2.5 : 0.0)
+smcScoreBull = 0.0
+smcScoreBull += (isBOSBullConfirmed ? 5.0 : 0.0)
+smcScoreBull += (chochBullish ? 5.0 : 0.0)
+smcScoreBull += (liqSweepBull ? 5.0 : 0.0)
+smcScoreBull += (isOBBullish ? 2.5 : 0.0)
+smcScoreBull += (fvgBullish ? 2.5 : 0.0)
+
 smcScoreBear = 0.0
-smcScoreBear += (bosBearish ? 5.0 : 0.0)
+smcScoreBear += (isBOSBearConfirmed ? 5.0 : 0.0)
 smcScoreBear += (chochBearish ? 5.0 : 0.0)
 smcScoreBear += (liqSweepBear ? 5.0 : 0.0)
 smcScoreBear += (isOBBearish ? 2.5 : 0.0)
 smcScoreBear += (fvgBearish ? 2.5 : 0.0)
 
 // --- Volume Score (15%) ---
-volScore = 0.0
-volScore += (volBullish ? 10.0 : 0.0)
-volScore += (volSpike ? 5.0 : 0.0)
+volScoreBull = 0.0
+volScoreBull += (volBullish ? 10.0 : 0.0)
+volScoreBull += (volSpike ? 5.0 : 0.0)
+
 volScoreBear = 0.0
 volScoreBear += (volBearish ? 10.0 : 0.0)
 volScoreBear += (volSpike ? 5.0 : 0.0)
 
 // --- Support/Resistance Score (15%) ---
-srScore = 0.0
-srScore += (nearSupport ? 15.0 : 0.0)
+srScoreBull = 0.0
+srScoreBull += (nearSupport ? 15.0 : 0.0)
+
 srScoreBear = 0.0
 srScoreBear += (nearResistance ? 15.0 : 0.0)
 
 // --- Final AI Confidence Score ---
-totalScoreBull = (trendScore * (weightTrend/0.25)) + (momScore * (weightMomentum/0.25)) + (smcScore * (weightSMC/0.20)) + (volScore * (weightVolume/0.15)) + (srScore * (weightSR/0.15))
+totalScoreBull = (trendScoreBull * (weightTrend/0.25)) + (momScoreBull * (weightMomentum/0.25)) + (smcScoreBull * (weightSMC/0.20)) + (volScoreBull * (weightVolume/0.15)) + (srScoreBull * (weightSR/0.15))
 totalScoreBear = (trendScoreBear * (weightTrend/0.25)) + (momScoreBear * (weightMomentum/0.25)) + (smcScoreBear * (weightSMC/0.20)) + (volScoreBear * (weightVolume/0.15)) + (srScoreBear * (weightSR/0.15))
 
 // Normalize to 100%
@@ -247,10 +267,14 @@ isValidTimeframe = timeframe.isintraday and (timeframe.multiplier == 1 or timefr
 // SIGNAL GENERATION
 // ==========================================
 
+// Signal Filters according to user rules
 canTrade = inSession and isValidPair and isValidTimeframe and adxStrong and volume > volAvg
 
-isCall = canTrade and confidenceBull >= minConfidence and stBullish and close > ema200
-isPut = canTrade and confidenceBear >= minConfidence and not stBullish and close < ema200
+isCall = canTrade and confidenceBull >= minConfidence and stBullish and close > ema200 and isBOSBullConfirmed and nearSupport
+isPut = canTrade and confidenceBear >= minConfidence and not stBullish and close < ema200 and isBOSBearConfirmed and nearResistance
+
+// Relaxed signals if strict AND is too rare (for user flexibility)
+// isCall := isCall or (canTrade and confidenceBull >= 95 and stBullish)
 
 // ==========================================
 // VISUALIZATIONS
@@ -273,13 +297,13 @@ if barstate.islast
     table.cell(dashboard, 1, 2, str.tostring(confidenceBear, "#.##") + "%", text_color=confidenceBear > 80 ? color.red : color.white)
 
     table.cell(dashboard, 0, 3, "Trend", text_color=color.white)
-    table.cell(dashboard, 1, 3, stBullish ? "Bullish" : "Bearish", text_color=stBullish ? color.green : color.red)
+    table.cell(dashboard, 1, 3, (stBullish ? "Bullish" : "Bearish"), text_color=(stBullish ? color.green : color.red))
 
     table.cell(dashboard, 0, 4, "Volatility", text_color=color.white)
-    table.cell(dashboard, 1, 4, close > bbUpper or close < bbLower ? "High" : "Low", text_color=color.aqua)
+    table.cell(dashboard, 1, 4, (close > bbUpper or close < bbLower ? "High" : "Low"), text_color=color.aqua)
 
     table.cell(dashboard, 0, 5, "Session", text_color=color.white)
-    table.cell(dashboard, 1, 5, inSession ? "Active" : "Closed", text_color=inSession ? color.green : color.gray)
+    table.cell(dashboard, 1, 5, (inSession ? "Active" : "Closed"), text_color=(inSession ? color.green : color.gray))
 
 // --- Zones ---
 // S/R Zones
