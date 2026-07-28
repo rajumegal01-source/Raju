@@ -1,0 +1,582 @@
+//@version=6
+indicator("ZydusPro Premium Institutional AI v6", shorttitle="ZydusPro AI v6", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// =============================================================================
+// INSTITUTIONAL SYSTEM CONFIGURATION & INPUTS
+// =============================================================================
+
+// --- Group: Smart Money Concepts (SMC) ---
+g_smc               = "Smart Money Concepts (SMC)"
+show_structure      = input.bool(true, "Show Market Structure (BOS/CHoCH)", group=g_smc, tooltip="Toggles display of Break of Structure and Change of Character lines and labels.")
+swing_length        = input.int(10, "Swing Structure Length", minval=2, group=g_smc, tooltip="Bar period to identify key swing highs and lows.")
+internal_length     = input.int(3, "Internal Structure Length", minval=1, group=g_smc, tooltip="Bar period to identify minor/internal structural shifts.")
+show_ob             = input.bool(true, "Show Order Blocks (OB)", group=g_smc, tooltip="Draws bullish and bearish institutional order blocks.")
+ob_threshold        = input.float(1.5, "OB Volume/Momentum Threshold", minval=0.5, step=0.1, group=g_smc, tooltip="Volume multiplier to confirm strong institutional impulse.")
+show_breaker        = input.bool(true, "Show Breaker Blocks", group=g_smc, tooltip="Draws broken order blocks that act as supply/demand flips.")
+show_fvg            = input.bool(true, "Show Fair Value Gaps (FVG)", group=g_smc, tooltip="Draws bullish and bearish FVGs on the chart.")
+fvg_mitigation_type = input.string("Close", "FVG Mitigation Type", options=["Wick", "Close"], group=g_smc, tooltip="Wick: partial touch mitigates; Close: candle close must break FVG.")
+show_liquidity      = input.bool(true, "Show Liquidity Sweeps (EQH/EQL & Swing)", group=g_smc, tooltip="Highlights sweeps of key liquidity pools.")
+eq_threshold        = input.float(0.1, "Equal Highs/Lows Threshold (%)", minval=0.01, step=0.01, group=g_smc, tooltip="Max price difference percentage to qualify as equal highs/lows.")
+show_zones          = input.bool(true, "Show Premium/Discount Zones", group=g_smc, tooltip="Plots Premium (shorting), Discount (buying), and Equilibrium levels on current swing.")
+
+// --- Group: AI Confirmation Engine ---
+g_ai                = "AI Confirmation Engine"
+ai_weight_trend     = input.int(25, "AI Trend Weight (%)", minval=0, maxval=100, group=g_ai)
+ai_weight_mom       = input.int(25, "AI Momentum Weight (%)", minval=0, maxval=100, group=g_ai)
+ai_weight_vol       = input.int(15, "AI Volatility Weight (%)", minval=0, maxval=100, group=g_ai)
+ai_weight_volume    = input.int(15, "AI Volume Weight (%)", minval=0, maxval=100, group=g_ai)
+ai_weight_smc       = input.int(20, "AI SMC/Liquidity Weight (%)", minval=0, maxval=100, group=g_ai)
+ai_conf_threshold   = input.int(70, "Signal AI Confidence Threshold (%)", minval=50, maxval=100, group=g_ai, tooltip="Minimum AI score required to trigger a standard Buy/Sell signal.")
+ai_strong_threshold = input.int(85, "Strong Signal Threshold (%)", minval=50, maxval=100, group=g_ai, tooltip="Minimum AI score required to trigger a Strong Buy/Sell signal.")
+
+// --- Group: Trend Engine ---
+g_trend             = "Trend Engine"
+show_ribbon         = input.bool(true, "Show EMA Ribbon", group=g_trend, tooltip="Displays four institutional EMA filters (20, 50, 100, 200).")
+show_st             = input.bool(true, "Show Supertrend Filter", group=g_trend)
+st_period           = input.int(10, "Supertrend Period", minval=1, group=g_trend)
+st_mult             = input.float(3.0, "Supertrend Multiplier", minval=0.1, step=0.1, group=g_trend)
+show_vwap           = input.bool(true, "Show Session VWAP", group=g_trend)
+show_kama           = input.bool(true, "Show Kaufman's Adaptive MA (KAMA)", group=g_trend)
+kama_period         = input.int(10, "KAMA Period", minval=1, group=g_trend)
+use_htf_filter      = input.bool(true, "Use Higher Timeframe (HTF) Filter", group=g_trend, tooltip="Filters entry signals with HTF trend alignment to ensure pro-trend execution.")
+htf_tf              = input.timeframe("4H", "HTF Timeframe", group=g_trend)
+
+// --- Group: Entry & Signal System ---
+g_entry             = "Entry System & Signals"
+show_signals        = input.bool(true, "Show Buy/Sell Signals", group=g_entry)
+req_trend_align     = input.bool(true, "Require Trend Alignment", group=g_entry, tooltip="Ensures signals align with HTF and/or local trend engine indicators.")
+req_smc_confluence  = input.bool(true, "Require SMC/Liquidity Confluence", group=g_entry, tooltip="Requires price to tap an active OB, FVG, or complete a liquidity sweep.")
+req_mom_confirm     = input.bool(true, "Require Momentum Confirmation", group=g_entry, tooltip="Requires RSI and MACD alignment for signal generation.")
+
+// --- Group: Risk Management ---
+g_risk              = "Risk Management"
+show_risk_mgr       = input.bool(true, "Show SL/TP Dynamic Boundaries", group=g_risk, tooltip="Plots dynamic Stop Loss and Take Profit levels upon signal execution.")
+risk_reward_ratio   = input.float(3.0, "Risk Reward Ratio (1:R)", minval=0.5, step=0.1, group=g_risk, tooltip="Target reward ratio based on the initial stop distance.")
+atr_sl_mult         = input.float(1.5, "ATR Stop Loss Multiplier", minval=0.5, step=0.1, group=g_risk, tooltip="Multiplier of ATR to determine Stop Loss distance from the swing/OB level.")
+atr_period          = input.int(14, "ATR Period", minval=1, group=g_risk)
+
+// --- Group: Dashboard & UI ---
+g_ui                = "Dashboard & Visual Design"
+show_dashboard      = input.bool(true, "Show Floating Dashboard", group=g_ui)
+db_position         = input.string("Top Right", "Dashboard Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=g_ui)
+db_size             = input.string("Normal", "Dashboard Size", options=["Small", "Normal", "Large"], group=g_ui)
+theme_color         = input.string("Zydus Premium (Dark Mode)", "Color Theme", options=["Zydus Premium (Dark Mode)", "Classic Neon", "Institutional Slate"], group=g_ui)
+
+// --- Group: Alerts ---
+g_alerts            = "Alert System"
+alert_on_buy        = input.bool(true, "Alert on BUY / STRONG BUY", group=g_alerts)
+alert_on_sell       = input.bool(true, "Alert on SELL / STRONG SELL", group=g_alerts)
+alert_on_smc        = input.bool(true, "Alert on Structure Break (BOS/CHoCH)", group=g_alerts)
+alert_on_liq        = input.bool(true, "Alert on Liquidity Sweep", group=g_alerts)
+
+// =============================================================================
+// HELPER FUNCTIONS & STRUCTURE DETECTION LOGIC
+// =============================================================================
+
+// Professional helper functions to identify pivot highs and lows
+f_is_pivot_high(len) =>
+    high[len] == ta.highest(high, 2 * len + 1)
+
+f_is_pivot_low(len) =>
+    low[len] == ta.lowest(low, 2 * len + 1)
+
+// Detect Equal Highs (EQH) and Equal Lows (EQL)
+f_is_equal_high(val1, val2, threshold_percent) =>
+    math.abs(val1 - val2) / val2 <= (threshold_percent / 100.0)
+
+f_is_equal_low(val1, val2, threshold_percent) =>
+    math.abs(val1 - val2) / val2 <= (threshold_percent / 100.0)
+
+// Liquidity Sweep detection logic:
+f_detect_liquidity_sweep(swing_h, swing_l) =>
+    bool upper_sweep = high > swing_h and close <= swing_h
+    bool lower_sweep = low < swing_l and close >= swing_l
+    [upper_sweep, lower_sweep]
+
+// =============================================================================
+// MARKET STRUCTURE (BOS & CHOCH) & ORDER BLOCKS (OB)
+// =============================================================================
+
+// State variables for tracking historical structure swings
+var int last_swing_h_index = 0
+var float last_swing_h_price = 0.0
+var int last_swing_l_index = 0
+var float last_swing_l_price = 0.0
+
+// Separate variables for zones plotting to avoid structural reset bugs
+var int zone_swing_h_index = 0
+var float zone_swing_h_price = 0.0
+var int zone_swing_l_index = 0
+var float zone_swing_l_price = 0.0
+
+var bool is_bullish_market = true
+
+// Flags for BOS & CHoCH events
+var bool bos_detected = false
+var bool choch_detected = false
+
+// Pivot high and low logic for major Swing structure
+ph = ta.pivothigh(high, swing_length, swing_length)
+pl = ta.pivotlow(low, swing_length, swing_length)
+
+if not na(ph)
+    last_swing_h_index := bar_index - swing_length
+    last_swing_h_price := ph
+    zone_swing_h_index := bar_index - swing_length
+    zone_swing_h_price := ph
+
+if not na(pl)
+    last_swing_l_index := bar_index - swing_length
+    last_swing_l_price := pl
+    zone_swing_l_index := bar_index - swing_length
+    zone_swing_l_price := pl
+
+// Track Equal Highs/Lows (EQH/EQL)
+var label eql_label = na
+var label eqh_label = na
+
+if show_liquidity and not na(pl)
+    float prev_pl = pl[1]
+    if not na(prev_pl) and f_is_equal_low(pl, prev_pl, eq_threshold)
+        if not na(eql_label)
+            label.delete(eql_label)
+        eql_label := label.new(x=bar_index - swing_length, y=pl, text="EQL", color=color.orange, textcolor=color.white, style=label.style_label_up, size=size.small)
+
+if show_liquidity and not na(ph)
+    float prev_ph = ph[1]
+    if not na(prev_ph) and f_is_equal_high(ph, prev_ph, eq_threshold)
+        if not na(eqh_label)
+            label.delete(eqh_label)
+        eqh_label := label.new(x=bar_index - swing_length, y=ph, text="EQH", color=color.orange, textcolor=color.white, style=label.style_label_down, size=size.small)
+
+// Market Structure Transition Logic (BOS / CHoCH)
+bos_detected := false
+choch_detected := false
+
+if show_structure and last_swing_h_price > 0 and last_swing_l_price > 0
+    if close > last_swing_h_price
+        if not is_bullish_market
+            choch_detected := true
+            is_bullish_market := true
+        else
+            bos_detected := true
+
+        // Draw structural line & label
+        if bos_detected or choch_detected
+            line.new(x1=last_swing_h_index, y1=last_swing_h_price, x2=bar_index, y2=last_swing_h_price, color=color.new(color.green, 40), width=2, style=line.style_dashed)
+            label.new(x=bar_index, y=last_swing_h_price, text=choch_detected ? "CHoCH (Bullish)" : "BOS (Bullish)", color=color.green, textcolor=color.white, style=label.style_label_down, size=size.small)
+            last_swing_h_price := 999999.0
+
+    else if close < last_swing_l_price
+        if is_bullish_market
+            choch_detected := true
+            is_bullish_market := false
+        else
+            bos_detected := true
+
+        // Draw structural line & label
+        if bos_detected or choch_detected
+            line.new(x1=last_swing_l_index, y1=last_swing_l_price, x2=bar_index, y2=last_swing_l_price, color=color.new(color.red, 40), width=2, style=line.style_dashed)
+            label.new(x=bar_index, y=last_swing_l_price, text=choch_detected ? "CHoCH (Bearish)" : "BOS (Bearish)", color=color.red, textcolor=color.white, style=label.style_label_up, size=size.small)
+            last_swing_l_price := 0.0
+
+// User-defined Order Block structure representation
+type OrderBlock
+    box block_box
+    float level
+    bool is_bullish
+    bool is_mitigated
+
+var OrderBlock[] active_obs = array.new<OrderBlock>()
+
+// Order Block detection & alerts flags
+var bool ob_detected_alert_flag = false
+var bool fvg_detected_alert_flag = false
+
+// Identify Bullish/Bearish Order Blocks (OB) based on volume confirmation
+if show_ob and not na(pl)
+    float atr_val = ta.atr(14)
+    bool is_expansion = (close - open) > (atr_val * ob_threshold)
+    if is_expansion
+        int idx = 1
+        while idx < 10 and close[idx] >= open[idx]
+            idx += 1
+
+        float ob_high = high[idx]
+        float ob_low = low[idx]
+
+        box b = box.new(left=bar_index - idx, top=ob_high, right=bar_index + 10, bottom=ob_low,
+                        border_color=color.new(color.green, 60), bgcolor=color.new(color.green, 90),
+                        text="Bullish OB", text_color=color.new(color.green, 30), text_size=size.small)
+        array.push(active_obs, OrderBlock.new(b, ob_high, true, false))
+        ob_detected_alert_flag := true
+
+if show_ob and not na(ph)
+    float atr_val = ta.atr(14)
+    bool is_expansion = (open - close) > (atr_val * ob_threshold)
+    if is_expansion
+        int idx = 1
+        while idx < 10 and close[idx] <= open[idx]
+            idx += 1
+
+        float ob_high = high[idx]
+        float ob_low = low[idx]
+
+        box b = box.new(left=bar_index - idx, top=ob_high, right=bar_index + 10, bottom=ob_low,
+                        border_color=color.new(color.red, 60), bgcolor=color.new(color.red, 90),
+                        text="Bearish OB", text_color=color.new(color.red, 30), text_size=size.small)
+        array.push(active_obs, OrderBlock.new(b, ob_low, false, false))
+        ob_detected_alert_flag := true
+
+// Order Block mitigation & Breaker Block transition logic
+if array.size(active_obs) > 0
+    for i = array.size(active_obs) - 1 to 0 by -1
+        OrderBlock ob = array.get(active_obs, i)
+        if not ob.is_mitigated
+            box.set_right(ob.block_box, bar_index)
+
+            if ob.is_bullish
+                if low < box.get_bottom(ob.block_box)
+                    ob.is_mitigated := true
+                    if show_breaker
+                        box.set_bgcolor(ob.block_box, color.new(color.purple, 92))
+                        box.set_border_color(ob.block_box, color.new(color.purple, 65))
+                        box.set_text(ob.block_box, "Bearish Breaker")
+                    else
+                        box.set_bgcolor(ob.block_box, color.new(color.gray, 95))
+                        box.set_border_color(ob.block_box, color.new(color.gray, 85))
+                        box.set_text(ob.block_box, "Mitigated OB")
+            else
+                if high > box.get_top(ob.block_box)
+                    ob.is_mitigated := true
+                    if show_breaker
+                        box.set_bgcolor(ob.block_box, color.new(color.blue, 92))
+                        box.set_border_color(ob.block_box, color.new(color.blue, 65))
+                        box.set_text(ob.block_box, "Bullish Breaker")
+                    else
+                        box.set_bgcolor(ob.block_box, color.new(color.gray, 95))
+                        box.set_border_color(ob.block_box, color.new(color.gray, 85))
+                        box.set_text(ob.block_box, "Mitigated OB")
+
+    // Optimization: Keep Order Blocks array pruned to avoid performance bottlenecks
+    if array.size(active_obs) > 30
+        OrderBlock oldest_ob = array.shift(active_obs)
+        box.delete(oldest_ob.block_box)
+
+// =============================================================================
+// FAIR VALUE GAPS (FVG) & PREMIUM/DISCOUNT ZONES
+// =============================================================================
+
+type FairValueGap
+    box fvg_box
+    float level_top
+    float level_bottom
+    bool is_bullish
+    bool is_mitigated
+
+var FairValueGap[] active_fvgs = array.new<FairValueGap>()
+
+// Detect Bullish & Bearish FVGs
+if show_fvg
+    if low > high[2] and close[1] > open[1]
+        box b = box.new(left=bar_index - 2, top=low, right=bar_index + 10, bottom=high[2],
+                        border_color=color.new(color.teal, 70), bgcolor=color.new(color.teal, 92),
+                        text="Bullish FVG", text_color=color.new(color.teal, 30), text_size=size.small)
+        array.push(active_fvgs, FairValueGap.new(b, low, high[2], true, false))
+        fvg_detected_alert_flag := true
+
+    else if high < low[2] and close[1] < open[1]
+        box b = box.new(left=bar_index - 2, top=low[2], right=bar_index + 10, bottom=high,
+                        border_color=color.new(color.orange, 70), bgcolor=color.new(color.orange, 92),
+                        text="Bearish FVG", text_color=color.new(color.orange, 30), text_size=size.small)
+        array.push(active_fvgs, FairValueGap.new(b, low[2], high, false, false))
+        fvg_detected_alert_flag := true
+
+// FVG Mitigation and Extents Update
+if array.size(active_fvgs) > 0
+    for i = array.size(active_fvgs) - 1 to 0 by -1
+        FairValueGap fvg = array.get(active_fvgs, i)
+        if not fvg.is_mitigated
+            box.set_right(fvg.fvg_box, bar_index)
+
+            if fvg_mitigation_type == "Wick"
+                if fvg.is_bullish
+                    if low < fvg.level_bottom
+                        fvg.is_mitigated := true
+                        box.set_bgcolor(fvg.fvg_box, color.new(color.gray, 95))
+                        box.set_text(fvg.fvg_box, "Filled FVG")
+                else
+                    if high > fvg.level_top
+                        fvg.is_mitigated := true
+                        box.set_bgcolor(fvg.fvg_box, color.new(color.gray, 95))
+                        box.set_text(fvg.fvg_box, "Filled FVG")
+            else // Close-based mitigation
+                if fvg.is_bullish
+                    if close < fvg.level_bottom
+                        fvg.is_mitigated := true
+                        box.set_bgcolor(fvg.fvg_box, color.new(color.gray, 95))
+                        box.set_text(fvg.fvg_box, "Filled FVG")
+                else
+                    if close > fvg.level_top
+                        fvg.is_mitigated := true
+                        box.set_bgcolor(fvg.fvg_box, color.new(color.gray, 95))
+                        box.set_text(fvg.fvg_box, "Filled FVG")
+
+    // Optimization: Keep FVG array pruned to prevent execution bottlenecks
+    if array.size(active_fvgs) > 30
+        FairValueGap oldest_fvg = array.shift(active_fvgs)
+        box.delete(oldest_fvg.fvg_box)
+
+// Premium & Discount Zones calculation
+var line equilibrium_line = na
+var line premium_line = na
+var line discount_line = na
+
+if show_zones and zone_swing_h_price > 0 and zone_swing_l_price > 0
+    float swing_range = zone_swing_h_price - zone_swing_l_price
+    float eq_level = zone_swing_l_price + (swing_range * 0.5)
+    float prem_level = zone_swing_l_price + (swing_range * 0.75)
+    float disc_level = zone_swing_l_price + (swing_range * 0.25)
+
+    if not na(equilibrium_line)
+        line.delete(equilibrium_line)
+        line.delete(premium_line)
+        line.delete(discount_line)
+
+    equilibrium_line := line.new(x1=math.max(zone_swing_h_index, zone_swing_l_index), y1=eq_level, x2=bar_index, y2=eq_level, color=color.new(color.gray, 50), width=1, style=line.style_dashed)
+    premium_line := line.new(x1=math.max(zone_swing_h_index, zone_swing_l_index), y1=prem_level, x2=bar_index, y2=prem_level, color=color.new(color.red, 70), width=1)
+    discount_line := line.new(x1=math.max(zone_swing_h_index, zone_swing_l_index), y1=disc_level, x2=bar_index, y2=disc_level, color=color.new(color.green, 70), width=1)
+
+// =============================================================================
+// TREND ENGINE
+// =============================================================================
+
+// EMA Ribbon computation
+ema20  = ta.ema(close, 20)
+ema50  = ta.ema(close, 50)
+ema100 = ta.ema(close, 100)
+ema200 = ta.ema(close, 200)
+
+plot(show_ribbon ? ema20 : na, color=color.new(color.green, 40), title="EMA 20")
+plot(show_ribbon ? ema50 : na, color=color.new(color.lime, 45), title="EMA 50")
+plot(show_ribbon ? ema100 : na, color=color.new(color.orange, 50), title="EMA 100")
+plot(show_ribbon ? ema200 : na, color=color.new(color.red, 55), title="EMA 200")
+
+// Supertrend implementation
+[st_value, st_dir] = ta.supertrend(st_mult, st_period)
+plot(show_st ? st_value : na, color = st_dir == 1 ? color.red : color.green, title="Supertrend")
+
+// Session VWAP implementation
+session_vwap = ta.vwap(close)
+plot(show_vwap ? session_vwap : na, color=color.new(color.teal, 30), title="VWAP")
+
+// Kaufman's Adaptive Moving Average (KAMA) - Optimized implementation using ta.sum()
+f_kama(src, length) =>
+    var float kama = na
+    float change = math.abs(src - src[length])
+    float volatility = ta.sum(math.abs(src - src[1]), length)
+    float er = volatility > 0 ? change / volatility : 0.0
+    float fast_sc = 2.0 / 3.0
+    float slow_sc = 2.0 / 31.0
+    float sc = math.pow(er * (fast_sc - slow_sc) + slow_sc, 2)
+    kama := na(kama[1]) ? src : kama[1] + sc * (src - kama[1])
+    kama
+
+kama_val = f_kama(close, kama_period)
+plot(show_kama ? kama_val : na, color=color.new(color.purple, 30), title="KAMA")
+
+// Non-repainting HTF Trend Filter using closed bar historical index [1] to avoid lookahead/repainting
+htf_close = request.security(syminfo.tickerid, htf_tf, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+htf_ema   = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 200)[1], barmerge.gaps_off, barmerge.lookahead_off)
+bool is_htf_bullish = htf_close > htf_ema
+
+// =============================================================================
+// AI CONFIRMATION ENGINE & ENTRY SYSTEM
+// =============================================================================
+
+// Dynamic technical scores computation
+// 1. Trend Score (0 - 100)
+float trend_score = 0.0
+trend_score += (close > ema20 ? 25.0 : 0.0)
+trend_score += (close > ema200 ? 25.0 : 0.0)
+trend_score += (st_dir == -1 ? 25.0 : 0.0)
+trend_score += (close > kama_val ? 25.0 : 0.0)
+
+// 2. Momentum Score (0 - 100)
+rsi_val = ta.rsi(close, 14)
+[macd_line, signal_line, _] = ta.macd(close, 12, 26, 9)
+float momentum_score = 0.0
+momentum_score += (rsi_val > 50 ? 50.0 : 0.0)
+momentum_score += (macd_line > signal_line ? 50.0 : 0.0)
+
+// 3. Volatility Confirmation Score (0 - 100)
+[bb_middle, bb_upper, bb_lower] = ta.bb(close, 20, 2)
+bb_bandwidth = (bb_upper - bb_lower) / bb_middle
+bb_bandwidth_ma = ta.sma(bb_bandwidth, 20)
+float volatility_score = bb_bandwidth > bb_bandwidth_ma ? 100.0 : 50.0
+
+// 4. Volume Confirmation Score (0 - 100)
+volume_ma = ta.sma(volume, 20)
+float volume_score = volume > volume_ma ? 100.0 : 30.0
+
+// 5. SMC / Liquidity Confluence Score (0 - 100)
+[is_upper_sweep, is_lower_sweep] = f_detect_liquidity_sweep(zone_swing_h_price, zone_swing_l_price)
+float smc_score = 0.0
+smc_score += (is_bullish_market ? 50.0 : 0.0)
+smc_score += ((is_upper_sweep or is_lower_sweep) ? 50.0 : 0.0)
+
+// AI Engine Weighted Confidence Score calculation
+float ai_confidence_score = (trend_score * ai_weight_trend +
+                              momentum_score * ai_weight_mom +
+                              volatility_score * ai_weight_vol +
+                              volume_score * ai_weight_volume +
+                              smc_score * ai_weight_smc) / 100.0
+
+// Signals generation conditions
+bool buy_trend_cond = req_trend_align ? (close > ema200 and (not use_htf_filter or is_htf_bullish)) : true
+bool sell_trend_cond = req_trend_align ? (close < ema200 and (not use_htf_filter or not is_htf_bullish)) : true
+
+bool buy_smc_cond = req_smc_confluence ? (is_lower_sweep or is_bullish_market) : true
+bool sell_smc_cond = req_smc_confluence ? (is_upper_sweep or not is_bullish_market) : true
+
+bool buy_mom_cond = req_mom_confirm ? (rsi_val > 45 and macd_line > signal_line) : true
+bool sell_mom_cond = req_mom_confirm ? (rsi_val < 55 and macd_line < signal_line) : true
+
+// Signal Triggers
+bool buy_signal = show_signals and buy_trend_cond and buy_smc_cond and buy_mom_cond and ai_confidence_score >= ai_conf_threshold and (close > open)
+bool sell_signal = show_signals and sell_trend_cond and sell_smc_cond and sell_mom_cond and (100.0 - ai_confidence_score) >= ai_conf_threshold and (close < open)
+
+bool strong_buy_signal = buy_signal and ai_confidence_score >= ai_strong_threshold
+bool strong_sell_signal = sell_signal and (100.0 - ai_confidence_score) >= ai_strong_threshold
+
+// Plots standard signals as premium shapes and labels
+plotshape(buy_signal and not strong_buy_signal, title="Buy Signal", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 20), size=size.normal)
+plotshape(strong_buy_signal, title="Strong Buy Signal", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 10), size=size.large)
+
+plotshape(sell_signal and not strong_sell_signal, title="Sell Signal", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 20), size=size.normal)
+plotshape(strong_sell_signal, title="Strong Sell Signal", style=shape.triangledown, location=location.abovebar, color=color.new(color.maroon, 10), size=size.large)
+
+// =============================================================================
+// RISK MANAGEMENT & SL/TP AUTO BOUNDARIES
+// =============================================================================
+
+// Dynamic stop and profit lines per trade entry
+var float current_sl = na
+var float current_tp1 = na
+var float current_tp2 = na
+var float current_tp3 = na
+
+float atr_v = ta.atr(atr_period)
+
+if show_risk_mgr
+    if buy_signal
+        current_sl := low - (atr_v * atr_sl_mult)
+        float risk_dist = close - current_sl
+        current_tp1 := close + (risk_dist * 2.0)
+        current_tp2 := close + (risk_dist * 3.0)
+        current_tp3 := close + (risk_dist * 5.0)
+    else if sell_signal
+        current_sl := high + (atr_v * atr_sl_mult)
+        float risk_dist = current_sl - close
+        current_tp1 := close - (risk_dist * 2.0)
+        current_tp2 := close - (risk_dist * 3.0)
+        current_tp3 := close - (risk_dist * 5.0)
+
+plot(show_risk_mgr ? current_sl : na, color=color.red, style=plot.style_linebr, linewidth=2, title="Auto SL")
+plot(show_risk_mgr ? current_tp1 : na, color=color.new(color.green, 30), style=plot.style_linebr, title="Auto TP 1:2")
+plot(show_risk_mgr ? current_tp2 : na, color=color.new(color.green, 15), style=plot.style_linebr, title="Auto TP 1:3")
+plot(show_risk_mgr ? current_tp3 : na, color=color.new(color.green, 0), style=plot.style_linebr, title="Auto TP 1:5")
+
+// =============================================================================
+// PREMIUM FLOATING DASHBOARD
+// =============================================================================
+
+// Construct position configuration from dashboard inputs
+db_pos_val = switch db_position
+    "Top Right"    => position.top_right
+    "Bottom Right" => position.bottom_right
+    "Top Left"     => position.top_left
+    => position.bottom_left
+
+db_sz_val = switch db_size
+    "Small" => size.small
+    "Large" => size.large
+    => size.normal
+
+// Neon / Slate palette setups (using standard grey RGB to avoid color.darkgray compilation errors)
+c_bg     = theme_color == "Classic Neon" ? color.new(color.navy, 10) : theme_color == "Institutional Slate" ? color.new(color.rgb(60, 60, 60), 10) : color.new(color.black, 15)
+c_text   = color.white
+c_accent = theme_color == "Classic Neon" ? color.cyan : theme_color == "Institutional Slate" ? color.gray : color.yellow
+
+var table info_table = table.new(position=db_pos_val, columns=2, rows=9, bgcolor=c_bg, border_width=1, border_color=color.new(color.white, 80))
+
+if show_dashboard and barstate.islast
+    table.set_cell_text(info_table, 0, 0, "ZYDUSPRO ANALYTICS", text_color=c_accent, text_size=db_sz_val)
+    table.set_cell_text(info_table, 1, 0, "AI CONFIRMATION v6", text_color=c_accent, text_size=db_sz_val)
+
+    table.set_cell_text(info_table, 0, 1, "AI CONFIDENCE SCORE", text_color=c_text, text_size=db_sz_val)
+    table.set_cell_text(info_table, 1, 1, str.tostring(ai_confidence_score, "#.0") + "%", text_color=ai_confidence_score > 60 ? color.green : color.red, text_size=db_sz_val)
+
+    table.set_cell_text(info_table, 0, 2, "MARKET TREND", text_color=c_text, text_size=db_sz_val)
+    table.set_cell_text(info_table, 1, 2, is_bullish_market ? "BULLISH" : "BEARISH", text_color=is_bullish_market ? color.green : color.red, text_size=db_sz_val)
+
+    table.set_cell_text(info_table, 0, 3, "LOCAL MOMENTUM", text_color=c_text, text_size=db_sz_val)
+    table.set_cell_text(info_table, 1, 3, rsi_val > 50 ? "BULLISH MOMENTUM" : "BEARISH MOMENTUM", text_color=rsi_val > 50 ? color.green : color.red, text_size=db_sz_val)
+
+    table.set_cell_text(info_table, 0, 4, "VOLUME BIAS", text_color=c_text, text_size=db_sz_val)
+    table.set_cell_text(info_table, 1, 4, volume > volume_ma ? "INSTITUTIONAL EXPANSION" : "COMPRESSION", text_color=volume > volume_ma ? color.green : color.orange, text_size=db_sz_val)
+
+    table.set_cell_text(info_table, 0, 5, "ATR VOLATILITY", text_color=c_text, text_size=db_sz_val)
+    table.set_cell_text(info_table, 1, 5, str.tostring(atr_v, "#.0000"), text_color=color.teal, text_size=db_sz_val)
+
+    table.set_cell_text(info_table, 0, 6, "MARKET STRUCTURE", text_color=c_text, text_size=db_sz_val)
+    table.set_cell_text(info_table, 1, 6, is_bullish_market ? "BULLISH BIAS" : "BEARISH BIAS", text_color=is_bullish_market ? color.green : color.red, text_size=db_sz_val)
+
+    table.set_cell_text(info_table, 0, 7, "ENTRY QUALITY", text_color=c_text, text_size=db_sz_val)
+    table.set_cell_text(info_table, 1, 7, ai_confidence_score > 80 ? "PREMIUM ARCHITECTURE" : "STANDBY RECON", text_color=ai_confidence_score > 80 ? color.lime : color.orange, text_size=db_sz_val)
+
+    table.set_cell_text(info_table, 0, 8, "SIGNAL STRENGTH", text_color=c_text, text_size=db_sz_val)
+    table.set_cell_text(info_table, 1, 8, strong_buy_signal or strong_sell_signal ? "STRONG CONFLUENCE" : buy_signal or sell_signal ? "STANDARD SIGNAL" : "NO POSITION DETECTED", text_color=strong_buy_signal or strong_sell_signal ? color.lime : buy_signal or sell_signal ? color.green : color.gray, text_size=db_sz_val)
+
+// =============================================================================
+// ALERT SYSTEM & ALERTCONDITIONS
+// =============================================================================
+
+// Define alertcondition functions for direct pine mapping support
+alertcondition(strong_buy_signal, title="STRONG BUY Alert", message="ZydusPro STRONG BUY executed. Premium Institutional Confluence established.")
+alertcondition(strong_sell_signal, title="STRONG SELL Alert", message="ZydusPro STRONG SELL executed. Premium Institutional Confluence established.")
+alertcondition(buy_signal, title="BUY Alert", message="ZydusPro Standard Buy entry detected.")
+alertcondition(sell_signal, title="SELL Alert", message="ZydusPro Standard Sell entry detected.")
+
+alertcondition(bos_detected, title="BOS Structure Break", message="Market Structure Break (BOS) detected.")
+alertcondition(choch_detected, title="CHoCH Character Shift", message="Market Character Shift (CHoCH) detected.")
+
+alertcondition(is_upper_sweep or is_lower_sweep, title="Liquidity Sweep", message="Institutional liquidity pool sweep detected.")
+
+alertcondition(ob_detected_alert_flag, title="Order Block Created", message="A new Order Block has been formed.")
+alertcondition(fvg_detected_alert_flag, title="Fair Value Gap Created", message="A new Fair Value Gap has been formed.")
+
+// Generic runtime dynamic alerts triggered at the bar close
+if barstate.isconfirmed
+    if alert_on_buy and strong_buy_signal
+        alert("STRONG BUY Confluence achieved on " + syminfo.ticker, alert.freq_once_per_bar_close)
+    else if alert_on_buy and buy_signal
+        alert("Standard BUY signal triggered on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+    if alert_on_sell and strong_sell_signal
+        alert("STRONG SELL Confluence achieved on " + syminfo.ticker, alert.freq_once_per_bar_close)
+    else if alert_on_sell and sell_signal
+        alert("Standard SELL signal triggered on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+    if alert_on_smc and bos_detected
+        alert("Market BOS detected on " + syminfo.ticker, alert.freq_once_per_bar_close)
+    if alert_on_smc and choch_detected
+        alert("Market CHoCH detected on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+    if alert_on_liq and (is_upper_sweep or is_lower_sweep)
+        alert("Institutional Liquidity Sweep detected on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+    if ob_detected_alert_flag
+        alert("Institutional Order Block Formed on " + syminfo.ticker, alert.freq_once_per_bar_close)
+    if fvg_detected_alert_flag
+        alert("Institutional Fair Value Gap Formed on " + syminfo.ticker, alert.freq_once_per_bar_close)
