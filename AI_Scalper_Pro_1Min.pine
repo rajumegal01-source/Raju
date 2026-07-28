@@ -1,0 +1,326 @@
+//@version=5
+indicator("AI Scalper Pro [1Min]", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// ==========================================
+// INPUTS & CONFIGURATION
+// ==========================================
+
+// --- General Setup ---
+minConfidence = input.float(65.0, "Min AI Confidence % for Signal", minval=0.0, maxval=100.0, step=5.0, group="AI Signal Core")
+minConfirms   = input.int(3, "Min Technical Confirmations (Out of 6)", minval=1, maxval=6, group="AI Signal Core")
+cooldownBars  = input.int(5, "Signal Cooldown (Bars)", minval=1, group="AI Signal Core")
+
+// --- Kaufman Adaptive MA (KAMA) ---
+kamaPeriod = input.int(10, "KAMA Efficiency Ratio Period", group="KAMA Trend adaptive")
+kamaFast   = input.int(2, "KAMA Fast EMA Length", group="KAMA Trend adaptive")
+kamaSlow   = input.int(30, "KAMA Slow EMA Length", group="KAMA Trend adaptive")
+
+// --- Hurst Exponent (Market Regime) ---
+hurstPeriod = input.int(30, "Hurst Exponent Period", group="Hurst Market Regime")
+hurstThreshold = input.float(0.55, "Hurst Trending Threshold", minval=0.4, maxval=0.7, step=0.05, group="Hurst Market Regime")
+
+// --- Linear Regression Forecast ---
+linRegPeriod = input.int(14, "Linear Regression Period", group="Linear Regression Prediction")
+linRegOffset = input.int(-2, "Linear Regression Forward Offset", group="Linear Regression Prediction")
+
+// --- Multi-Confirmations Setup ---
+rsiLen      = input.int(14, "RSI Length", group="Technical Filters")
+rsiOverbought = input.int(70, "RSI Overbought", group="Technical Filters")
+rsiOversold   = input.int(30, "RSI Oversold", group="Technical Filters")
+
+macdFast    = input.int(12, "MACD Fast Length", group="Technical Filters")
+macdSlow    = input.int(26, "MACD Slow Length", group="Technical Filters")
+macdSignal  = input.int(9, "MACD Signal Length", group="Technical Filters")
+
+volMultiplier = input.float(1.5, "Volume Spike Multiplier (vs 20-period SMA)", step=0.1, group="Technical Filters")
+
+// --- Risk Management (ATR-based SL/TP) ---
+atrLen    = input.int(14, "ATR Length for Risk", group="Risk Management")
+slATRMult = input.float(1.5, "Stop Loss ATR Multiplier", step=0.1, group="Risk Management")
+tpATRMult = input.float(2.5, "Take Profit ATR Multiplier", step=0.1, group="Risk Management")
+
+// ==========================================
+// DETAILED ALGORITHMS & CALCULATIONS
+// ==========================================
+
+// 1. Kaufman Adaptive MA (KAMA)
+kamaER_change = math.abs(close - close[kamaPeriod])
+kamaER_volatility = math.sum(math.abs(close - close[1]), kamaPeriod)
+kamaER = kamaER_volatility != 0 ? kamaER_change / kamaER_volatility : 0.0
+
+fastSC = 2.0 / (kamaFast + 1.0)
+slowSC = 2.0 / (kamaSlow + 1.0)
+smoothConstant = math.pow(kamaER * (fastSC - slowSC) + slowSC, 2.0)
+
+var float kamaValue = na
+kamaValue := na(kamaValue[1]) ? close : kamaValue[1] + smoothConstant * (close - kamaValue[1])
+
+kamaBullish = close > kamaValue
+kamaBearish = close < kamaValue
+
+// 2. Hurst Exponent (Trending vs Choppy Market Detection)
+hurstStDev = ta.stdev(close, hurstPeriod)
+hurstRange = ta.highest(close, hurstPeriod) - ta.lowest(close, hurstPeriod)
+hurstRS    = hurstStDev > 0.0 ? hurstRange / hurstStDev : 1.0
+hurstExp   = math.log(math.max(hurstRS, 1.001)) / math.log(hurstPeriod)
+
+isTrending = hurstExp > hurstThreshold
+isChoppy   = hurstExp <= hurstThreshold
+
+// 3. Linear Regression 2-Bar Forward Prediction
+linRegForecast = ta.linreg(close, linRegPeriod, linRegOffset)
+lrBullish = linRegForecast > close
+lrBearish = linRegForecast < close
+
+// 4. Candlestick Pattern AI Classifier
+isBullishEngulfing = close[1] < open[1] and close > open and close >= open[1] and open <= close[1]
+isBearishEngulfing = close[1] > open[1] and close < open and close <= open[1] and open >= close[1]
+
+bodySize = math.abs(close - open)
+rangeSize = high - low
+upperShadow = high - math.max(close, open)
+lowerShadow = math.min(close, open) - low
+
+isHammer = rangeSize > 0 and lowerShadow > bodySize * 2.0 and upperShadow < bodySize * 0.5
+isShootingStar = rangeSize > 0 and upperShadow > bodySize * 2.0 and lowerShadow < bodySize * 0.5
+
+isMorningStar = close[2] < open[2] and bodySize[1] < (high[1] - low[1]) * 0.4 and close > open and close > (open[2] + close[2]) / 2.0
+isEveningStar = close[2] > open[2] and bodySize[1] < (high[1] - low[1]) * 0.4 and close < open and close < (open[2] + close[2]) / 2.0
+
+isBullishCandleAI = isBullishEngulfing or isHammer or isMorningStar
+isBearishCandleAI = isBearishEngulfing or isShootingStar or isEveningStar
+
+// 5. Technical Confirmations Setup
+rsiVal = ta.rsi(close, rsiLen)
+rsiBullish = rsiVal > 50 and rsiVal < rsiOverbought
+rsiBearish = rsiVal < 50 and rsiVal > rsiOversold
+
+[macdLine, macdSignalLine, _] = ta.macd(close, macdFast, macdSlow, macdSignal)
+macdBullish = macdLine > macdSignalLine
+macdBearish = macdLine < macdSignalLine
+
+volSMA = ta.sma(volume, 20)
+isVolSpike = volume > (volSMA * volMultiplier)
+volBullish = close > open and isVolSpike
+volBearish = close < open and isVolSpike
+
+atrVal = ta.atr(atrLen)
+
+// ==========================================
+// SMART CONFLUENCE SCORING ENGINE
+// ==========================================
+
+bullScore = 0.0
+bearScore = 0.0
+
+// Kaufman Adaptive MA (Trend) - Weighted 25%
+bullScore += kamaBullish ? 25.0 : 0.0
+bearScore += kamaBearish ? 25.0 : 0.0
+
+// Hurst Exponent (Trending Filter) - Weighted 15%
+bullScore += isTrending ? 15.0 : 0.0
+bearScore += isTrending ? 15.0 : 0.0
+
+// Linear Regression Prediction - Weighted 20%
+bullScore += lrBullish ? 20.0 : 0.0
+bearScore += lrBearish ? 20.0 : 0.0
+
+// Candlestick Pattern AI Recognition - Weighted 15%
+bullScore += isBullishCandleAI ? 15.0 : 0.0
+bearScore += isBearishCandleAI ? 15.0 : 0.0
+
+// Momentum & Technical Confirmations - Weighted 25%
+bullTechnicalPoints = 0.0
+bearTechnicalPoints = 0.0
+
+bullTechnicalPoints += (rsiBullish ? 1.0 : 0.0)
+bullTechnicalPoints += (macdBullish ? 1.0 : 0.0)
+bullTechnicalPoints += (volBullish ? 1.0 : 0.0)
+bullTechnicalPoints += (close > ta.vwap ? 1.0 : 0.0)
+bullTechnicalPoints += (rsiVal < rsiOversold ? 1.0 : 0.0)
+bullTechnicalPoints += (close > ta.sma(close, 20) ? 1.0 : 0.0)
+
+bearTechnicalPoints += (rsiBearish ? 1.0 : 0.0)
+bearTechnicalPoints += (macdBearish ? 1.0 : 0.0)
+bearTechnicalPoints += (volBearish ? 1.0 : 0.0)
+bearTechnicalPoints += (close < ta.vwap ? 1.0 : 0.0)
+bearTechnicalPoints += (rsiVal > rsiOverbought ? 1.0 : 0.0)
+bearTechnicalPoints += (close < ta.sma(close, 20) ? 1.0 : 0.0)
+
+bullScore += (bullTechnicalPoints / 6.0) * 25.0
+bearScore += (bearTechnicalPoints / 6.0) * 25.0
+
+// Ensure normalized bounds [0-100]
+bullConfidence = math.min(100.0, bullScore)
+bearConfidence = math.min(100.0, bearScore)
+
+// ==========================================
+// BUY & SELL SIGNAL GENERATION
+// ==========================================
+
+var int lastSignalBar = -cooldownBars
+
+// Active Confirmations counter
+bullConfirmsCount = 0
+bearConfirmsCount = 0
+
+if kamaBullish
+    bullConfirmsCount := bullConfirmsCount + 1
+if lrBullish
+    bullConfirmsCount := bullConfirmsCount + 1
+if isBullishCandleAI
+    bullConfirmsCount := bullConfirmsCount + 1
+if rsiBullish
+    bullConfirmsCount := bullConfirmsCount + 1
+if macdBullish
+    bullConfirmsCount := bullConfirmsCount + 1
+if volBullish
+    bullConfirmsCount := bullConfirmsCount + 1
+
+if kamaBearish
+    bearConfirmsCount := bearConfirmsCount + 1
+if lrBearish
+    bearConfirmsCount := bearConfirmsCount + 1
+if isBearishCandleAI
+    bearConfirmsCount := bearConfirmsCount + 1
+if rsiBearish
+    bearConfirmsCount := bearConfirmsCount + 1
+if macdBearish
+    bearConfirmsCount := bearConfirmsCount + 1
+if volBearish
+    bearConfirmsCount := bearConfirmsCount + 1
+
+// Signal Triggers
+triggerBuy  = (bullConfidence >= minConfidence) and (bullConfirmsCount >= minConfirms) and isTrending and (bar_index - lastSignalBar >= cooldownBars)
+triggerSell = (bearConfidence >= minConfidence) and (bearConfirmsCount >= minConfirms) and isTrending and (bar_index - lastSignalBar >= cooldownBars)
+
+if triggerBuy
+    lastSignalBar := bar_index
+if triggerSell
+    lastSignalBar := bar_index
+
+// Track Win Rates dynamically in Session
+var int totalTrades = 0
+var int totalWins = 0
+var float entryPrice = na
+var bool activeBuyTrade = false
+var bool activeSellTrade = false
+var float activeSL = na
+var float activeTP = na
+
+// Manage Virtual SL/TP to calculate live Session stats
+if activeBuyTrade
+    if low <= activeSL
+        totalTrades := totalTrades + 1
+        activeBuyTrade := false
+        entryPrice := na
+    else if high >= activeTP
+        totalTrades := totalTrades + 1
+        totalWins := totalWins + 1
+        activeBuyTrade := false
+        entryPrice := na
+
+if activeSellTrade
+    if high <= activeSL
+        totalTrades := totalTrades + 1
+        activeSellTrade := false
+        entryPrice := na
+    else if low >= activeTP
+        totalTrades := totalTrades + 1
+        totalWins := totalWins + 1
+        activeSellTrade := false
+        entryPrice := na
+
+// Handle virtual entries on Signal
+if triggerBuy and not activeBuyTrade and not activeSellTrade
+    activeBuyTrade := true
+    entryPrice := close
+    activeSL := close - (atrVal * slATRMult)
+    activeTP := close + (atrVal * tpATRMult)
+else if triggerSell and not activeBuyTrade and not activeSellTrade
+    activeSellTrade := true
+    entryPrice := close
+    activeSL := close + (atrVal * slATRMult)
+    activeTP := close - (atrVal * tpATRMult)
+
+winRate = totalTrades > 0 ? (float(totalWins) / float(totalTrades)) * 100.0 : 0.0
+
+// ==========================================
+// VISUALIZATION AND CHARTS
+// ==========================================
+
+// Plot KAMA Band
+kamaColor = kamaBullish ? color.new(color.green, 70) : color.new(color.red, 70)
+plot(kamaValue, title="KAMA Trend Line", color=kamaColor, linewidth=2)
+
+// Plot Signals
+plotshape(triggerBuy, title="AI BUY Signal", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.normal, text="AI BUY")
+plotshape(triggerSell, title="AI SELL Signal", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.normal, text="AI SELL")
+
+// Draw Risk Management Lines
+var line slLine = na
+var line tpLine = na
+
+if triggerBuy
+    line.delete(slLine[1])
+    line.delete(tpLine[1])
+    slLine := line.new(bar_index, close - (atrVal * slATRMult), bar_index + 10, close - (atrVal * slATRMult), color=color.new(color.red, 30), style=line.style_dashed, width=2)
+    tpLine := line.new(bar_index, close + (atrVal * tpATRMult), bar_index + 10, close + (atrVal * tpATRMult), color=color.new(color.green, 30), style=line.style_dashed, width=2)
+else if triggerSell
+    line.delete(slLine[1])
+    line.delete(tpLine[1])
+    slLine := line.new(bar_index, close + (atrVal * slATRMult), bar_index + 10, close + (atrVal * slATRMult), color=color.new(color.red, 30), style=line.style_dashed, width=2)
+    tpLine := line.new(bar_index, close - (atrVal * tpATRMult), bar_index + 10, close - (atrVal * tpATRMult), color=color.new(color.green, 30), style=line.style_dashed, width=2)
+else
+    if not na(slLine) and not na(tpLine)
+        line.set_x2(slLine, bar_index)
+        line.set_x2(tpLine, bar_index)
+
+// ==========================================
+// INTERACTIVE DASHBOARD HUD
+// ==========================================
+
+var table hud = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 30), border_width=1, border_color=color.gray)
+if barstate.islast
+    // Header
+    table.cell(hud, 0, 0, "AI Scalper HUD", text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 30))
+    table.cell(hud, 1, 0, "Value / Status", text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 30))
+
+    // Hurst Exponent
+    marketStateStr = isTrending ? "Trending" : "Choppy"
+    marketStateColor = isTrending ? color.green : color.red
+    table.cell(hud, 0, 1, "Market Regime", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 1, marketStateStr + " (" + str.tostring(hurstExp, "#.##") + ")", text_color=marketStateColor, text_size=size.small)
+
+    // AI Bullish Confidence
+    table.cell(hud, 0, 2, "AI Bull Confidence", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 2, str.tostring(bullConfidence, "#.##") + "%", text_color=bullConfidence >= minConfidence ? color.green : color.gray, text_size=size.small)
+
+    // AI Bearish Confidence
+    table.cell(hud, 0, 3, "AI Bear Confidence", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 3, str.tostring(bearConfidence, "#.##") + "%", text_color=bearConfidence >= minConfidence ? color.red : color.gray, text_size=size.small)
+
+    // Active Confirmations
+    table.cell(hud, 0, 4, "Active Confirmations", text_color=color.white, text_size=size.small)
+    maxConfirmsVal = math.max(bullConfirmsCount, bearConfirmsCount)
+    table.cell(hud, 1, 4, str.tostring(maxConfirmsVal) + " / 6", text_color=maxConfirmsVal >= minConfirms ? color.green : color.yellow, text_size=size.small)
+
+    // Session Statistics
+    table.cell(hud, 0, 5, "Session Win Rate", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 5, str.tostring(winRate, "#.##") + "% (" + str.tostring(totalWins) + "/" + str.tostring(totalTrades) + ")", text_color=winRate >= 50 ? color.green : color.yellow, text_size=size.small)
+
+    // Linear Regression Projection
+    table.cell(hud, 0, 6, "LR Projection (2b)", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 6, lrBullish ? "Upward" : "Downward", text_color=lrBullish ? color.green : color.red, text_size=size.small)
+
+    // Volatility Status (ATR)
+    table.cell(hud, 0, 7, "Volatility (ATR)", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 7, str.tostring(atrVal, "#.####"), text_color=color.aqua, text_size=size.small)
+
+// ==========================================
+// ALERT NOTIFICATIONS
+// ==========================================
+
+alertcondition(triggerBuy, "AI BUY ALERT", "AI Scalper Pro Detected 🟢 BUY Signal!")
+alertcondition(triggerSell, "AI SELL ALERT", "AI Scalper Pro Detected 🔴 SELL Signal!")
+alertcondition(triggerBuy or triggerSell, "AI GENERAL SIGNAL ALERT", "AI Scalper Pro Signal Triggered!")
