@@ -1,5 +1,5 @@
 //@version=6
-indicator("Institutional Trend & Structure Engine [Modules 1 & 2]", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)
+indicator("Institutional Trend, Structure & AI Signal Engine [Modules 1-4]", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)
 
 // =============================================================================
 // GLOBAL CONSTANTS & PALETTE
@@ -62,6 +62,21 @@ show_sr          = input.bool(true, "Show Support & Resistance Lines", group=gp_
 show_zones       = input.bool(true, "Show Supply & Demand Zones", group=gp_structure)
 show_bos_choch   = input.bool(true, "Show BOS & CHoCH Levels", group=gp_structure)
 show_sweeps      = input.bool(true, "Show Liquidity Sweep Level Breaches", group=gp_structure)
+
+// --- MODULE 3: MOMENTUM & SIGNALS ENGINE ---
+gp_signals       = "Module 3: Buy/Sell Signal Options (1-Min Scalping)"
+show_signals     = input.bool(true, "Generate Buy/Sell Arrows", group=gp_signals)
+rsi_len          = input.int(14, "RSI Length", minval=1, group=gp_signals)
+macd_fast        = input.int(12, "MACD Fast Length", minval=1, group=gp_signals)
+macd_slow        = input.int(26, "MACD Slow Length", minval=1, group=gp_signals)
+macd_signal      = input.int(9, "MACD Signal Length", minval=1, group=gp_signals)
+vol_ma_len       = input.int(20, "Volume MA Length", minval=1, group=gp_signals)
+vol_multiplier   = input.float(1.0, "Volume Multiplier Threshold", minval=0.1, step=0.1, group=gp_signals)
+
+// --- MODULE 4: AI CONFIRMATION ENGINE ---
+gp_ai            = "Module 4: AI Confirmation Engine Settings"
+htf_tf           = input.timeframe("5", "Higher Timeframe", group=gp_ai)
+ai_confidence_th = input.int(85, "Minimum AI Confidence Threshold (%)", minval=50, maxval=100, group=gp_ai)
 
 // --- DASHBOARD OPTIONS ---
 gp_dash = "Dashboard Options"
@@ -306,6 +321,112 @@ if array.size(structure_lines) > max_drawings
     line.delete(array.shift(structure_lines))
 
 // =============================================================================
+// MOMENTUM & SIGNALS ENGINES (MODULE 3)
+// =============================================================================
+// RSI Calculation
+rsi_val = ta.rsi(close, rsi_len)
+
+// MACD Calculation
+[macd_val, macd_sig, macd_hist] = ta.macd(close, macd_fast, macd_slow, macd_signal)
+
+// Volume Confirmation Calculation
+vol_ma = ta.sma(volume, vol_ma_len)
+bool vol_confirmed = volume > (vol_ma * vol_multiplier)
+
+// =============================================================================
+// AI CONFIRMATION ENGINE (MODULE 4)
+// =============================================================================
+// 1. ATR (Volatility check)
+atr_val = ta.atr(14)
+atr_ma  = ta.sma(atr_val, 20)
+
+// 2. Higher Timeframe Confirmation (Non-Repainting with strict delay [1])
+htf_close = request.security(syminfo.tickerid, htf_tf, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+htf_ema   = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 50)[1], barmerge.gaps_off, barmerge.lookahead_off)
+bool htf_bullish = htf_close > htf_ema
+
+// 3. AI Filter Conditions (To Ignore/Filter out Bad Market Environments)
+bool is_low_volume      = volume < vol_ma * 0.8
+bool is_low_atr         = atr_val < atr_ma * 0.8
+bool is_sideways_market = adx_val < adx_thres
+bool is_weak_momentum   = rsi_val >= 48.0 and rsi_val <= 52.0
+
+// 4. Calculate AI Confidence Score (0-100%) dynamically
+float ai_score_buy = 0.0
+float ai_score_sell = 0.0
+
+// Trend Score mapping (Max 25%)
+float ai_trend_weight = (trend_score / 100.0) * 25.0
+ai_score_buy  += ai_trend_weight
+ai_score_sell += (25.0 - ai_trend_weight)
+
+// Momentum mapping (RSI & MACD - Max 25%)
+float ai_mom_buy = 0.0
+float ai_mom_sell = 0.0
+if rsi_val > 50.0
+    ai_mom_buy += 10.0
+else
+    ai_mom_sell += 10.0
+if macd_val > macd_sig
+    ai_mom_buy += 15.0
+else
+    ai_mom_sell += 15.0
+ai_score_buy  += ai_mom_buy
+ai_score_sell += ai_mom_sell
+
+// Volume mapping (Max 15%)
+float ai_vol_score = vol_confirmed ? 15.0 : 5.0
+ai_score_buy  += ai_vol_score
+ai_score_sell += ai_vol_score
+
+// ATR Volatility mapping (Max 15%)
+float ai_atr_score = (atr_val > atr_ma) ? 15.0 : 5.0
+ai_score_buy  += ai_atr_score
+ai_score_sell += ai_atr_score
+
+// VWAP mapping (Max 10%)
+if close > vwap_val
+    ai_score_buy  += 10.0
+else
+    ai_score_sell += 10.0
+
+// HTF mapping (Max 5%)
+if htf_bullish
+    ai_score_buy  += 5.0
+else
+    ai_score_sell += 5.0
+
+// Market Structure SMC mapping (Max 5%)
+if market_bias == "Bullish"
+    ai_score_buy  += 5.0
+else if market_bias == "Bearish"
+    ai_score_sell += 5.0
+
+// Active AI score tracking based on candle close
+float active_ai_score = 0.0
+
+// Raw Signal Confluences on closed bar [1]
+bool raw_buy = (trend_score[1] >= 60.0 or close[1] > ema50[1]) and (close[1] > vwap_val[1]) and (macd_val[1] > macd_sig[1]) and (not is_low_volume[1]) and (not is_low_atr[1]) and (not is_sideways_market[1]) and (not is_weak_momentum[1]) and htf_bullish[1] and (ai_score_buy[1] >= ai_confidence_th)
+bool raw_sell = (trend_score[1] <= 40.0 or close[1] < ema50[1]) and (close[1] < vwap_val[1]) and (macd_val[1] < macd_sig[1]) and (not is_low_volume[1]) and (not is_low_atr[1]) and (not is_sideways_market[1]) and (not is_weak_momentum[1]) and (not htf_bullish[1]) and (ai_score_sell[1] >= ai_confidence_th)
+
+// Record active confidence to display in table
+if barstate.islast
+    active_ai_score := market_bias == "Bullish" ? ai_score_buy : market_bias == "Bearish" ? ai_score_sell : (ai_score_buy + ai_score_sell) / 2.0
+
+// State management to guarantee NO duplicate signals in a row
+var int signal_state = 0 // 1 = Last was BUY, -1 = Last was SELL
+bool trigger_buy = false
+bool trigger_sell = false
+
+if raw_buy and signal_state != 1
+    trigger_buy := true
+    signal_state := 1
+
+if raw_sell and signal_state != -1
+    trigger_sell := true
+    signal_state := -1
+
+// =============================================================================
 // PLOTS AND VISUALIZATIONS
 // =============================================================================
 plot(show_ema20 ? ema20 : na, "EMA 20", color=color.new(color_ema20, 15), linewidth=1)
@@ -317,6 +438,11 @@ plot(show_kama ? kama_val : na, "KAMA", color=color.new(color_kama, 10), linewid
 // SuperTrend Plot (Dynamic line coloring on trend direction)
 plot(show_st ? st_val : na, "SuperTrend", color=st_bullish ? color.new(COLOR_BULLISH, 0) : color.new(COLOR_BEARISH, 0), linewidth=2)
 
+// Plot Buy/Sell signals (Arrows) on completed candle close
+// Using offset=-1 to match the bar index [1] where signal confluence occurred
+plotshape(show_signals and trigger_buy ? true : false, title="AI Confirmed BUY Arrow", style=shape.arrowup, location=location.belowbar, color=color.white, size=size.normal, offset=-1)
+plotshape(show_signals and trigger_sell ? true : false, title="AI Confirmed SELL Arrow", style=shape.arrowdown, location=location.abovebar, color=color.yellow, size=size.normal, offset=-1)
+
 // =============================================================================
 // METRICS FLOATING DASHBOARD (TABLE)
 // =============================================================================
@@ -325,12 +451,12 @@ var table info_table = na
 if show_dash and barstate.islast
     // Perform highly optimized table instantiation once to avoid recreating the object every tick
     if na(info_table)
-        info_table := table.new(f_get_position(dash_pos), 2, 10, bgcolor=COLOR_DARK_BG, border_color=COLOR_MIXED, border_width=1)
+        info_table := table.new(f_get_position(dash_pos), 2, 11, bgcolor=COLOR_DARK_BG, border_color=COLOR_MIXED, border_width=1)
 
     t_size = f_get_text_size(dash_size)
 
     // Row 0: Header
-    table.cell(info_table, 0, 0, "INSTITUTIONAL SUITE", text_color=COLOR_TEXT_LGT, text_size=t_size, bgcolor=COLOR_MIXED, text_valign=text.valign_middle)
+    table.cell(info_table, 0, 0, "AI SUITE PRO", text_color=COLOR_TEXT_LGT, text_size=t_size, bgcolor=COLOR_MIXED, text_valign=text.valign_middle)
     table.merge_cells(info_table, 0, 0, 1, 0)
 
     // Row 1: EMA Status
@@ -375,10 +501,15 @@ if show_dash and barstate.islast
     sweep_text_color = bullish_sweep_detected or bearish_sweep_detected ? COLOR_TEXT_DRK : COLOR_TEXT_LGT
     table.cell(info_table, 1, 7, sweep_str, bgcolor=sweep_color, text_color=sweep_text_color, text_size=t_size)
 
-    // Row 8: Trend Score Header
-    table.cell(info_table, 0, 8, "OVERALL TREND SCORE", text_color=COLOR_TEXT_LGT, text_size=t_size, bgcolor=COLOR_DARK_BG)
-    table.merge_cells(info_table, 0, 8, 1, 8)
+    // Row 8: AI Score value
+    table.cell(info_table, 0, 8, "AI Confidence Score", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    ai_status_color = active_ai_score >= 85.0 ? COLOR_BULLISH : active_ai_score >= 70.0 ? COLOR_NEUTRAL : COLOR_MIXED
+    table.cell(info_table, 1, 8, str.tostring(active_ai_score, "0") + "%", bgcolor=ai_status_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
 
-    // Row 9: Trend Score Value
-    table.cell(info_table, 0, 9, str.tostring(trend_score, "0") + " / 100", text_color=COLOR_TEXT_DRK, text_size=size.large, bgcolor=f_get_score_color(trend_score))
+    // Row 9: Trend Score Header
+    table.cell(info_table, 0, 9, "OVERALL TREND SCORE", text_color=COLOR_TEXT_LGT, text_size=t_size, bgcolor=COLOR_DARK_BG)
     table.merge_cells(info_table, 0, 9, 1, 9)
+
+    // Row 10: Trend Score Value
+    table.cell(info_table, 0, 10, str.tostring(trend_score, "0") + " / 100", text_color=COLOR_TEXT_DRK, text_size=size.large, bgcolor=f_get_score_color(trend_score))
+    table.merge_cells(info_table, 0, 10, 1, 10)
