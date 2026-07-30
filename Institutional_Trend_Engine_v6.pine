@@ -1,5 +1,5 @@
 //@version=6
-indicator("Institutional Trend Engine [Module 1]", overlay=true, max_labels_count=500, max_boxes_count=500)
+indicator("Institutional Trend & Structure Engine [Modules 1 & 2]", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)
 
 // =============================================================================
 // GLOBAL CONSTANTS & PALETTE
@@ -12,11 +12,16 @@ color COLOR_DARK_BG  = #131722  // Dark Slate
 color COLOR_TEXT_LGT = #FFFFFF  // White
 color COLOR_TEXT_DRK = #131722  // Dark Grey
 
+// Colors for Module 2 Structure
+color COLOR_SUPPLY   = color.new(#FF5252, 85) // Light Crimson
+color COLOR_DEMAND   = color.new(#00E676, 85) // Light Green
+color COLOR_SR_LEVEL = color.new(#78909C, 30) // Slate grey for S/R
+
 // =============================================================================
 // INPUTS
 // =============================================================================
-// Group: EMAs
-gp_ema = "Exponential Moving Averages (EMAs)"
+// --- MODULE 1: TREND ENGINE ---
+gp_ema = "Module 1: Exponential Moving Averages (EMAs)"
 show_ema20  = input.bool(true, "Show EMA 20", group=gp_ema)
 color_ema20 = input.color(#29B6F6, "EMA 20 Color", group=gp_ema)
 show_ema50  = input.bool(true, "Show EMA 50", group=gp_ema)
@@ -28,40 +33,46 @@ ema20_len  = input.int(20, "EMA 20 Length", minval=1, group=gp_ema)
 ema50_len  = input.int(50, "EMA 50 Length", minval=1, group=gp_ema)
 ema200_len = input.int(200, "EMA 200 Length", minval=1, group=gp_ema)
 
-// Group: VWAP
-gp_vwap = "Volume Weighted Average Price (VWAP)"
+gp_vwap = "Module 1: Volume Weighted Average Price (VWAP)"
 show_vwap  = input.bool(true, "Show VWAP", group=gp_vwap)
 color_vwap = input.color(#78909C, "VWAP Color", group=gp_vwap)
 
-// Group: SuperTrend
-gp_st = "SuperTrend Engine"
+gp_st = "Module 1: SuperTrend Engine"
 show_st    = input.bool(true, "Show SuperTrend", group=gp_st)
 st_mult    = input.float(3.0, "SuperTrend Multiplier", minval=0.1, step=0.1, group=gp_st)
 st_len     = input.int(10, "SuperTrend ATR Period", minval=1, group=gp_st)
 
-// Group: Adaptive Moving Average (KAMA)
-gp_kama = "Kaufman Adaptive Moving Average (KAMA)"
+gp_kama = "Module 1: Kaufman Adaptive Moving Average (KAMA)"
 show_kama  = input.bool(true, "Show KAMA", group=gp_kama)
 color_kama = input.color(#26A69A, "KAMA Color", group=gp_kama)
 kama_len   = input.int(10, "KAMA Efficiency Ratio Period", minval=1, group=gp_kama)
 kama_fast  = input.int(2, "KAMA Fastest EMA Period", minval=1, group=gp_kama)
 kama_slow  = input.int(30, "KAMA Slowest EMA Period", minval=1, group=gp_kama)
 
-// Group: ADX / DMI
-gp_adx = "ADX / DMI Strength Engine"
+gp_adx = "Module 1: ADX / DMI Strength Engine"
 adx_len    = input.int(14, "ADX Smoothing / DI Length", minval=1, group=gp_adx)
 adx_thres  = input.int(20, "ADX Strong Trend Threshold", minval=1, group=gp_adx)
 
-// Group: Dashboard & Visualization Options
+// --- MODULE 2: MARKET STRUCTURE ENGINE ---
+gp_structure     = "Module 2: Market Structure Configuration"
+left_bars        = input.int(5, "Left Anchor Bars (Strength)", minval=1, group=gp_structure)
+right_bars       = input.int(5, "Right Confirmation Bars (Delay)", minval=1, group=gp_structure)
+max_drawings     = input.int(8, "Max S/R levels & Zones to Keep", minval=1, maxval=20, group=gp_structure)
+show_sr          = input.bool(true, "Show Support & Resistance Lines", group=gp_structure)
+show_zones       = input.bool(true, "Show Supply & Demand Zones", group=gp_structure)
+show_bos_choch   = input.bool(true, "Show BOS & CHoCH Levels", group=gp_structure)
+show_sweeps      = input.bool(true, "Show Liquidity Sweep Level Breaches", group=gp_structure)
+
+// --- DASHBOARD OPTIONS ---
 gp_dash = "Dashboard Options"
 show_dash  = input.bool(true, "Show Floating Dashboard", group=gp_dash)
 dash_pos   = input.string("top_right", "Dashboard Position", options=["top_right", "top_left", "bottom_right", "bottom_left"], group=gp_dash)
 dash_size  = input.string("normal", "Dashboard Text Size", options=["small", "normal", "large"], group=gp_dash)
 
 // =============================================================================
-// REUSABLE FUNCTIONS
+// REUSABLE FUNCTIONS & HELPERS
 // =============================================================================
-// Calculates Kaufman's Adaptive Moving Average (KAMA)
+// Kaufman Adaptive Moving Average (KAMA)
 f_kama(series float src, int length, int fast_len, int slow_len) =>
     float price = src
     float xvnoise = math.abs(price - price[1])
@@ -70,13 +81,13 @@ f_kama(series float src, int length, int fast_len, int slow_len) =>
     float nefratio = nnoise != 0.0 ? nsignal / nnoise : 0.0
     float nfastend = 2.0 / (fast_len + 1.0)
     float nslowend = 2.0 / (slow_len + 1.0)
-    float nsmooth = math.pow(nefratio * (nfastend - nslowend) + nslowend, 2.0)
+    float nssmooth = math.pow(nefratio * (nfastend - nslowend) + nslowend, 2.0)
 
     var float kama_val = na
-    kama_val := nz(kama_val[1], price) + nsmooth * (price - nz(kama_val[1], price))
+    kama_val := nz(kama_val[1], price) + nssmooth * (price - nz(kama_val[1], price))
     kama_val
 
-// Map position string to TradingView table position constant
+// Dashboard position constant mapping
 f_get_position(string pos) =>
     switch pos
         "top_left"     => position.top_left
@@ -84,14 +95,14 @@ f_get_position(string pos) =>
         "bottom_right" => position.bottom_right
         => position.top_right
 
-// Map size string to TradingView text size constant
+// Dashboard size constant mapping
 f_get_text_size(string sz) =>
     switch sz
         "small" => size.small
         "large" => size.large
         => size.normal
 
-// Helper to determine background color dynamically based on trend score (0 - 100)
+// Dynamic trend score background color
 f_get_score_color(float score) =>
     if score >= 80.0
         #00C853  // Bright Green
@@ -104,32 +115,27 @@ f_get_score_color(float score) =>
     else
         #D50000  // Bright Red
 
+// Cleanup drawings from arrays using a while loop to instantly adapt to menu setting changes
+f_manage_drawings(array<line> line_arr, array<box> box_arr, int max_limit) =>
+    while array.size(line_arr) > max_limit
+        line.delete(array.shift(line_arr))
+    while array.size(box_arr) > max_limit
+        box.delete(array.shift(box_arr))
+
 // =============================================================================
-// ENGINE COMPUTATIONS
+// INDICATOR & ENGINE COMPUTATIONS (MODULE 1)
 // =============================================================================
-// 1. EMAs Calculation
 ema20  = ta.ema(close, ema20_len)
 ema50  = ta.ema(close, ema50_len)
 ema200 = ta.ema(close, ema200_len)
-
-// 2. VWAP Calculation
 vwap_val = ta.vwap(hlc3)
-
-// 3. SuperTrend Calculation
 [st_val, st_dir] = ta.supertrend(st_mult, st_len)
 bool st_bullish = st_dir == -1
-
-// 4. KAMA Calculation
 kama_val = f_kama(close, kama_len, kama_fast, kama_slow)
 bool kama_rising = kama_val > kama_val[1]
-
-// 5. ADX / DMI Calculation
 [di_plus, di_minus, adx_val] = ta.dmi(adx_len, adx_len)
 
-// =============================================================================
-// INSTITUTIONAL TREND SCORE CALCULATION
-// =============================================================================
-// Scoring breakdown (Sum = 100 max)
+// 0-100 Multi-Factor Trend Score
 float ema_score = 0.0
 if close > ema20
     ema_score += 5.0
@@ -161,6 +167,145 @@ else
 float trend_score = ema_score + st_score + kama_score + vwap_score + dmi_score
 
 // =============================================================================
+// MARKET STRUCTURE COMPUTATIONS (MODULE 2)
+// =============================================================================
+// Detect Swing High / Swing Low
+float p_high = ta.pivothigh(high, left_bars, right_bars)
+float p_low  = ta.pivotlow(low, left_bars, right_bars)
+
+// Track historical swing extremes (non-repainting arrays for tracking structural references)
+var float[] list_swing_highs = array.new_float(0)
+var int[]   list_swing_high_idx = array.new_int(0)
+var float[] list_swing_lows  = array.new_float(0)
+var int[]   list_swing_low_idx  = array.new_int(0)
+
+// Keep drawing arrays for clean, limited horizontal levels
+var line[] sr_lines   = array.new_line(0)
+var box[]  zone_boxes = array.new_box(0)
+var line[] structure_lines = array.new_line(0)
+
+// Market Structure Bias Tracking
+var string market_bias = "Neutral" // "Bullish", "Bearish", "Neutral"
+
+// Detect and save Pivots
+if not na(p_high)
+    array.push(list_swing_highs, p_high)
+    array.push(list_swing_high_idx, bar_index - right_bars)
+
+    // Draw Support & Resistance
+    if show_sr
+        line new_res = line.new(bar_index - right_bars, p_high, bar_index, p_high, color=COLOR_SR_LEVEL, width=1, style=line.style_dashed)
+        array.push(sr_lines, new_res)
+
+    // Draw Supply Zone Box (from High of swing candle to the body or close of that candle)
+    if show_zones
+        float box_bottom = math.max(open[right_bars], close[right_bars])
+        box new_supply = box.new(bar_index - right_bars, p_high, bar_index, box_bottom, bgcolor=COLOR_SUPPLY, border_color=COLOR_SUPPLY, border_width=1)
+        array.push(zone_boxes, new_supply)
+
+if not na(p_low)
+    array.push(list_swing_lows, p_low)
+    array.push(list_swing_low_idx, bar_index - right_bars)
+
+    // Draw Support & Resistance
+    if show_sr
+        line new_supp = line.new(bar_index - right_bars, p_low, bar_index, p_low, color=COLOR_SR_LEVEL, width=1, style=line.style_dashed)
+        array.push(sr_lines, new_supp)
+
+    // Draw Demand Zone Box (from Low of swing candle to the body or close of that candle)
+    if show_zones
+        float box_top = math.min(open[right_bars], close[right_bars])
+        box new_demand = box.new(bar_index - right_bars, box_top, bar_index, p_low, bgcolor=COLOR_DEMAND, border_color=COLOR_DEMAND, border_width=1)
+        array.push(zone_boxes, new_demand)
+
+// Extend recent active S/R lines and zone boxes to the current bar
+if barstate.islast
+    if array.size(sr_lines) > 0
+        for i = 0 to math.min(array.size(sr_lines) - 1, max_drawings - 1)
+            line.set_x2(array.get(sr_lines, array.size(sr_lines) - 1 - i), bar_index)
+    if array.size(zone_boxes) > 0
+        for i = 0 to math.min(array.size(zone_boxes) - 1, max_drawings - 1)
+            box.set_right(array.get(zone_boxes, array.size(zone_boxes) - 1 - i), bar_index)
+
+// Manage and clean up S/R lines and supply/demand boxes
+f_manage_drawings(sr_lines, zone_boxes, max_drawings)
+
+// Get last confirmed Swing High and Low for structural assessment
+float last_swing_high = array.size(list_swing_highs) > 0 ? array.get(list_swing_highs, array.size(list_swing_highs) - 1) : na
+int last_high_index   = array.size(list_swing_high_idx) > 0 ? array.get(list_swing_high_idx, array.size(list_swing_high_idx) - 1) : na
+float last_swing_low  = array.size(list_swing_lows) > 0 ? array.get(list_swing_lows, array.size(list_swing_lows) - 1) : na
+int last_low_index    = array.size(list_swing_low_idx) > 0 ? array.get(list_swing_low_idx, array.size(list_swing_low_idx) - 1) : na
+
+// Tracking Liquidity Sweeps
+var bool bullish_sweep_detected = false
+var bool bearish_sweep_detected = false
+bullish_sweep_detected := false
+bearish_sweep_detected := false
+
+if not na(last_swing_low) and low < last_swing_low and close > last_swing_low
+    bullish_sweep_detected := true
+    if show_sweeps
+        line sweep_line = line.new(last_low_index, last_swing_low, bar_index, last_swing_low, color=COLOR_BULLISH, width=1, style=line.style_dotted)
+        label.new(bar_index, last_swing_low, "LQD SWEEP", color=COLOR_BULLISH, textcolor=COLOR_TEXT_DRK, size=size.small, style=label.style_label_up)
+        array.push(structure_lines, sweep_line)
+
+if not na(last_swing_high) and high > last_swing_high and close < last_swing_high
+    bearish_sweep_detected := true
+    if show_sweeps
+        line sweep_line = line.new(last_high_index, last_swing_high, bar_index, last_swing_high, color=COLOR_BEARISH, width=1, style=line.style_dotted)
+        label.new(bar_index, last_swing_high, "LQD SWEEP", color=COLOR_BEARISH, textcolor=COLOR_TEXT_LGT, size=size.small, style=label.style_label_down)
+        array.push(structure_lines, sweep_line)
+
+// Tracking Break of Structure (BOS) & Change of Character (CHoCH)
+var bool bos_occurred   = false
+var bool choch_occurred = false
+var string structure_label = ""
+
+bos_occurred   := false
+choch_occurred := false
+
+// Trigger structures only on complete candle close breach of the latest swing levels
+if not na(last_swing_high) and ta.crossover(close, last_swing_high)
+    if market_bias == "Bearish"
+        choch_occurred := true
+        market_bias := "Bullish"
+        structure_label := "CHoCH"
+        if show_bos_choch
+            line struct_l = line.new(last_high_index, last_swing_high, bar_index, last_swing_high, color=COLOR_BULLISH, width=2, style=line.style_solid)
+            label.new(bar_index, last_swing_high, "CHoCH (Bullish)", color=COLOR_BULLISH, textcolor=COLOR_TEXT_DRK, size=size.small, style=label.style_label_down)
+            array.push(structure_lines, struct_l)
+    else
+        bos_occurred := true
+        market_bias := "Bullish"
+        structure_label := "BOS"
+        if show_bos_choch
+            line struct_l = line.new(last_high_index, last_swing_high, bar_index, last_swing_high, color=COLOR_BULLISH, width=1, style=line.style_dashed)
+            label.new(bar_index, last_swing_high, "BOS (Bullish)", color=COLOR_BULLISH, textcolor=COLOR_TEXT_DRK, size=size.small, style=label.style_label_down)
+            array.push(structure_lines, struct_l)
+
+if not na(last_swing_low) and ta.crossunder(close, last_swing_low)
+    if market_bias == "Bullish"
+        choch_occurred := true
+        market_bias := "Bearish"
+        structure_label := "CHoCH"
+        if show_bos_choch
+            line struct_l = line.new(last_low_index, last_swing_low, bar_index, last_swing_low, color=COLOR_BEARISH, width=2, style=line.style_solid)
+            label.new(bar_index, last_swing_low, "CHoCH (Bearish)", color=COLOR_BEARISH, textcolor=COLOR_TEXT_LGT, size=size.small, style=label.style_label_up)
+            array.push(structure_lines, struct_l)
+    else
+        bos_occurred := true
+        market_bias := "Bearish"
+        structure_label := "BOS"
+        if show_bos_choch
+            line struct_l = line.new(last_low_index, last_swing_low, bar_index, last_swing_low, color=COLOR_BEARISH, width=1, style=line.style_dashed)
+            label.new(bar_index, last_swing_low, "BOS (Bearish)", color=COLOR_BEARISH, textcolor=COLOR_TEXT_LGT, size=size.small, style=label.style_label_up)
+            array.push(structure_lines, struct_l)
+
+// Maintain max limit of active structure lines
+if array.size(structure_lines) > max_drawings
+    line.delete(array.shift(structure_lines))
+
+// =============================================================================
 // PLOTS AND VISUALIZATIONS
 // =============================================================================
 plot(show_ema20 ? ema20 : na, "EMA 20", color=color.new(color_ema20, 15), linewidth=1)
@@ -178,12 +323,14 @@ plot(show_st ? st_val : na, "SuperTrend", color=st_bullish ? color.new(COLOR_BUL
 var table info_table = na
 
 if show_dash and barstate.islast
-    // Create 7 Rows x 2 Columns Table
-    info_table := table.new(f_get_position(dash_pos), 2, 8, bgcolor=COLOR_DARK_BG, border_color=COLOR_MIXED, border_width=1)
+    // Perform highly optimized table instantiation once to avoid recreating the object every tick
+    if na(info_table)
+        info_table := table.new(f_get_position(dash_pos), 2, 10, bgcolor=COLOR_DARK_BG, border_color=COLOR_MIXED, border_width=1)
+
     t_size = f_get_text_size(dash_size)
 
     // Row 0: Header
-    table.cell(info_table, 0, 0, "TREND ENGINE MODULE", text_color=COLOR_TEXT_LGT, text_size=t_size, bgcolor=COLOR_MIXED, text_valign=text.valign_middle)
+    table.cell(info_table, 0, 0, "INSTITUTIONAL SUITE", text_color=COLOR_TEXT_LGT, text_size=t_size, bgcolor=COLOR_MIXED, text_valign=text.valign_middle)
     table.merge_cells(info_table, 0, 0, 1, 0)
 
     // Row 1: EMA Status
@@ -216,10 +363,22 @@ if show_dash and barstate.islast
     dmi_status_color = (di_plus > di_minus) ? (adx_val > adx_thres ? COLOR_BULLISH : COLOR_MIXED) : (adx_val > adx_thres ? COLOR_BEARISH : COLOR_MIXED)
     table.cell(info_table, 1, 5, dmi_status_str + " (" + str.tostring(adx_val, "0.0") + ")", bgcolor=dmi_status_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
 
-    // Row 6: Trend Score Header
-    table.cell(info_table, 0, 6, "OVERALL TREND SCORE", text_color=COLOR_TEXT_LGT, text_size=t_size, bgcolor=COLOR_DARK_BG)
-    table.merge_cells(info_table, 0, 6, 1, 6)
+    // Row 6: Market Structure Bias
+    table.cell(info_table, 0, 6, "Structure Bias (SMC)", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    bias_color = market_bias == "Bullish" ? COLOR_BULLISH : market_bias == "Bearish" ? COLOR_BEARISH : COLOR_NEUTRAL
+    table.cell(info_table, 1, 6, market_bias, bgcolor=bias_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
 
-    // Row 7: Trend Score Value
-    table.cell(info_table, 0, 7, str.tostring(trend_score, "0") + " / 100", text_color=COLOR_TEXT_DRK, text_size=size.large, bgcolor=f_get_score_color(trend_score))
-    table.merge_cells(info_table, 0, 7, 1, 7)
+    // Row 7: Recent Liquidity State
+    table.cell(info_table, 0, 7, "Liquidity Sweep", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    sweep_str = bullish_sweep_detected ? "Bullish Sweep" : bearish_sweep_detected ? "Bearish Sweep" : "None"
+    sweep_color = bullish_sweep_detected ? COLOR_BULLISH : bearish_sweep_detected ? COLOR_BEARISH : COLOR_DARK_BG
+    sweep_text_color = bullish_sweep_detected or bearish_sweep_detected ? COLOR_TEXT_DRK : COLOR_TEXT_LGT
+    table.cell(info_table, 1, 7, sweep_str, bgcolor=sweep_color, text_color=sweep_text_color, text_size=t_size)
+
+    // Row 8: Trend Score Header
+    table.cell(info_table, 0, 8, "OVERALL TREND SCORE", text_color=COLOR_TEXT_LGT, text_size=t_size, bgcolor=COLOR_DARK_BG)
+    table.merge_cells(info_table, 0, 8, 1, 8)
+
+    // Row 9: Trend Score Value
+    table.cell(info_table, 0, 9, str.tostring(trend_score, "0") + " / 100", text_color=COLOR_TEXT_DRK, text_size=size.large, bgcolor=f_get_score_color(trend_score))
+    table.merge_cells(info_table, 0, 9, 1, 9)
