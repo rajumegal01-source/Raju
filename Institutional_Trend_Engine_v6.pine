@@ -63,7 +63,7 @@ show_zones       = input.bool(true, "Show Supply & Demand Zones", group=gp_struc
 show_bos_choch   = input.bool(true, "Show BOS & CHoCH Levels", group=gp_structure)
 show_sweeps      = input.bool(true, "Show Liquidity Sweep Level Breaches", group=gp_structure)
 
-// --- MODULE 3 & 4: REWORKED SIGNALS & AI ---
+// --- MODULE 3 & 4: MOMENTUM SIGNALS & AI ---
 gp_ai            = "Modules 3 & 4: Scalping Signals & AI Engine"
 show_signals     = input.bool(true, "Generate Buy/Sell Arrows", group=gp_ai)
 rsi_len          = input.int(14, "RSI Length", minval=1, group=gp_ai)
