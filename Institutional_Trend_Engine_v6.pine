@@ -1,0 +1,562 @@
+//@version=6
+indicator("Institutional Trend, Structure, AI Signal & Alert Engine [Modules 1-5]", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)
+
+// =============================================================================
+// GLOBAL CONSTANTS & PALETTE
+// =============================================================================
+color COLOR_BULLISH  = #00E676  // Neon Green
+color COLOR_BEARISH  = #FF1744  // Crimson Red
+color COLOR_NEUTRAL  = #FFD600  // Amber Yellow
+color COLOR_MIXED    = #B0BEC5  // Slate Blue-Gray
+color COLOR_DARK_BG  = #131722  // Dark Slate
+color COLOR_TEXT_LGT = #FFFFFF  // White
+color COLOR_TEXT_DRK = #131722  // Dark Grey
+
+// Colors for Module 2 Structure
+color COLOR_SUPPLY   = color.new(#FF5252, 85) // Light Crimson
+color COLOR_DEMAND   = color.new(#00E676, 85) // Light Green
+color COLOR_SR_LEVEL = color.new(#78909C, 30) // Slate grey for S/R
+
+// =============================================================================
+// INPUTS
+// =============================================================================
+// --- MODULE 1: TREND ENGINE ---
+gp_ema = "Module 1: Exponential Moving Averages (EMAs)"
+show_ema20  = input.bool(true, "Show EMA 20", group=gp_ema)
+color_ema20 = input.color(#29B6F6, "EMA 20 Color", group=gp_ema)
+show_ema50  = input.bool(true, "Show EMA 50", group=gp_ema)
+color_ema50 = input.color(#AB47BC, "EMA 50 Color", group=gp_ema)
+show_ema200 = input.bool(true, "Show EMA 200", group=gp_ema)
+color_ema200= input.color(#FFA726, "EMA 200 Color", group=gp_ema)
+
+ema20_len  = input.int(20, "EMA 20 Length", minval=1, group=gp_ema)
+ema50_len  = input.int(50, "EMA 50 Length", minval=1, group=gp_ema)
+ema200_len = input.int(200, "EMA 200 Length", minval=1, group=gp_ema)
+
+gp_vwap = "Module 1: Volume Weighted Average Price (VWAP)"
+show_vwap  = input.bool(true, "Show VWAP", group=gp_vwap)
+color_vwap = input.color(#78909C, "VWAP Color", group=gp_vwap)
+
+gp_st = "Module 1: SuperTrend Engine"
+show_st    = input.bool(true, "Show SuperTrend", group=gp_st)
+st_mult    = input.float(3.0, "SuperTrend Multiplier", minval=0.1, step=0.1, group=gp_st)
+st_len     = input.int(10, "SuperTrend ATR Period", minval=1, group=gp_st)
+
+gp_kama = "Module 1: Kaufman Adaptive Moving Average (KAMA)"
+show_kama  = input.bool(true, "Show KAMA", group=gp_kama)
+color_kama = input.color(#26A69A, "KAMA Color", group=gp_kama)
+kama_len   = input.int(10, "KAMA Efficiency Ratio Period", minval=1, group=gp_kama)
+kama_fast  = input.int(2, "KAMA Fastest EMA Period", minval=1, group=gp_kama)
+kama_slow  = input.int(30, "KAMA Slowest EMA Period", minval=1, group=gp_kama)
+
+gp_adx = "Module 1: ADX / DMI Strength Engine"
+adx_len    = input.int(14, "ADX Smoothing / DI Length", minval=1, group=gp_adx)
+adx_thres  = input.int(20, "ADX Strong Trend Threshold", minval=1, group=gp_adx)
+
+// --- MODULE 2: MARKET STRUCTURE ENGINE ---
+gp_structure     = "Module 2: Market Structure Configuration"
+left_bars        = input.int(5, "Left Anchor Bars (Strength)", minval=1, group=gp_structure)
+right_bars       = input.int(5, "Right Confirmation Bars (Delay)", minval=1, group=gp_structure)
+max_drawings     = input.int(8, "Max S/R levels & Zones to Keep", minval=1, maxval=20, group=gp_structure)
+show_sr          = input.bool(true, "Show Support & Resistance Lines", group=gp_structure)
+show_zones       = input.bool(true, "Show Supply & Demand Zones", group=gp_structure)
+show_bos_choch   = input.bool(true, "Show BOS & CHoCH Levels", group=gp_structure)
+show_sweeps      = input.bool(true, "Show Liquidity Sweep Level Breaches", group=gp_structure)
+
+// --- MODULE 3 & 4: MOMENTUM SIGNALS & AI ---
+gp_ai            = "Modules 3 & 4: Scalping Signals & AI Engine"
+show_signals     = input.bool(true, "Generate Buy/Sell Arrows", group=gp_ai)
+rsi_len          = input.int(14, "RSI Length", minval=1, group=gp_ai)
+macd_fast        = input.int(12, "MACD Fast Length", minval=1, group=gp_ai)
+macd_slow        = input.int(26, "MACD Slow Length", minval=1, group=gp_ai)
+macd_signal      = input.int(9, "MACD Signal Length", minval=1, group=gp_ai)
+vol_ma_len       = input.int(20, "Volume MA Length", minval=1, group=gp_ai)
+vol_multiplier   = input.float(1.0, "Volume Multiplier Threshold", minval=0.1, step=0.1, group=gp_ai)
+htf_tf           = input.timeframe("5", "Higher Timeframe Confirm", group=gp_ai)
+ai_confidence_th = input.int(85, "Minimum AI Confidence Threshold (%)", minval=50, maxval=100, group=gp_ai)
+
+// --- DASHBOARD OPTIONS ---
+gp_dash = "Dashboard Options"
+show_dash  = input.bool(true, "Show Floating Dashboard", group=gp_dash)
+dash_pos   = input.string("top_right", "Dashboard Position", options=["top_right", "top_left", "bottom_right", "bottom_left"], group=gp_dash)
+dash_size  = input.string("normal", "Dashboard Text Size", options=["small", "normal", "large"], group=gp_dash)
+
+// =============================================================================
+// REUSABLE FUNCTIONS & HELPERS
+// =============================================================================
+// Kaufman Adaptive Moving Average (KAMA)
+f_kama(series float src, simple int length, simple int fast_len, simple int slow_len) =>
+    float price = src
+    float xvnoise = math.abs(price - price[1])
+    float nsignal = math.abs(price - price[length])
+    float nnoise = math.sum(xvnoise, length)
+    float nefratio = nnoise != 0.0 ? nsignal / nnoise : 0.0
+    float nfastend = 2.0 / (fast_len + 1.0)
+    float nslowend = 2.0 / (slow_len + 1.0)
+    float nssmooth = math.pow(nefratio * (nfastend - nslowend) + nslowend, 2.0)
+
+    var float kama_val = na
+    kama_val := nz(kama_val[1], price) + nssmooth * (price - nz(kama_val[1], price))
+    kama_val
+
+// Dashboard position constant mapping
+f_get_position(string pos) =>
+    switch pos
+        "top_left"     => position.top_left
+        "bottom_left"  => position.bottom_left
+        "bottom_right" => position.bottom_right
+        => position.top_right
+
+// Dashboard size constant mapping
+f_get_text_size(string sz) =>
+    switch sz
+        "small" => size.small
+        "large" => size.large
+        => size.normal
+
+// Dynamic trend score background color
+f_get_score_color(float score) =>
+    if score >= 80.0
+        #00C853  // Bright Green
+    else if score >= 60.0
+        #64DD17  // Light Green
+    else if score >= 40.0
+        #FFD600  // Amber / Neutral
+    else if score >= 20.0
+        #FF6D00  // Orange
+    else
+        #D50000  // Bright Red
+
+// Cleanup drawings from arrays using a while loop to instantly adapt to menu setting changes
+f_manage_drawings(line[] line_arr, box[] box_arr, simple int max_limit) =>
+    while array.size(line_arr) > max_limit
+        line.delete(array.remove(line_arr, 0))
+    while array.size(box_arr) > max_limit
+        box.delete(array.remove(box_arr, 0))
+
+// =============================================================================
+// INDICATOR & ENGINE COMPUTATIONS (MODULE 1)
+// =============================================================================
+ema20  = ta.ema(close, ema20_len)
+ema50  = ta.ema(close, ema50_len)
+ema200 = ta.ema(close, ema200_len)
+vwap_val = ta.vwap(hlc3)
+[st_val, st_dir] = ta.supertrend(st_mult, st_len)
+bool st_bullish = st_dir == -1
+kama_val = f_kama(close, kama_len, kama_fast, kama_slow)
+bool kama_rising = kama_val > kama_val[1]
+[di_plus, di_minus, adx_val] = ta.dmi(adx_len, adx_len)
+
+// 0-100 Multi-Factor Trend Score
+float ema_score = 0.0
+if close > ema20
+    ema_score += 5.0
+if close > ema50
+    ema_score += 5.0
+if close > ema200
+    ema_score += 5.0
+if ema20 > ema50
+    ema_score += 5.0
+if ema50 > ema200
+    ema_score += 10.0
+
+float st_score = st_bullish ? 20.0 : 0.0
+
+float kama_score = 0.0
+if close > kama_val
+    kama_score += 10.0
+if kama_rising
+    kama_score += 10.0
+
+float vwap_score = (close > vwap_val) ? 15.0 : 0.0
+
+float dmi_score = 0.0
+if di_plus > di_minus
+    dmi_score += (adx_val > adx_thres) ? 15.0 : 10.0
+else
+    dmi_score += (adx_val <= adx_thres) ? 5.0 : 0.0
+
+float trend_score = ema_score + st_score + kama_score + vwap_score + dmi_score
+
+// =============================================================================
+// MARKET STRUCTURE COMPUTATIONS (MODULE 2)
+// =============================================================================
+// Detect Swing High / Swing Low
+float p_high = ta.pivothigh(high, left_bars, right_bars)
+float p_low  = ta.pivotlow(low, left_bars, right_bars)
+
+// Track historical swing extremes (non-repainting arrays for tracking structural references)
+var float[] list_swing_highs = array.new_float(0)
+var int[]   list_swing_high_idx = array.new_int(0)
+var float[] list_swing_lows  = array.new_float(0)
+var int[]   list_swing_low_idx  = array.new_int(0)
+
+// Keep drawing arrays for clean, limited horizontal levels using standard functions
+var line[] sr_lines   = array.new_line(0)
+var box[]  zone_boxes = array.new_box(0)
+var line[] structure_lines = array.new_line(0)
+
+// Market Structure Bias Tracking
+var string market_bias = "Neutral" // "Bullish", "Bearish", "Neutral"
+
+// Detect and save Pivots
+if not na(p_high)
+    array.push(list_swing_highs, p_high)
+    array.push(list_swing_high_idx, bar_index - right_bars)
+
+    // Draw Support & Resistance
+    if show_sr
+        line new_res = line.new(bar_index - right_bars, p_high, bar_index, p_high, color=COLOR_SR_LEVEL, width=1, style=line.style_dashed)
+        array.push(sr_lines, new_res)
+
+    // Draw Supply Zone Box (from High of swing candle to the body or close of that candle)
+    if show_zones
+        float box_bottom = math.max(open[right_bars], close[right_bars])
+        box new_supply = box.new(bar_index - right_bars, p_high, bar_index, box_bottom, bgcolor=COLOR_SUPPLY, border_color=COLOR_SUPPLY, border_width=1)
+        array.push(zone_boxes, new_supply)
+
+if not na(p_low)
+    array.push(list_swing_lows, p_low)
+    array.push(list_swing_low_idx, bar_index - right_bars)
+
+    // Draw Support & Resistance
+    if show_sr
+        line new_supp = line.new(bar_index - right_bars, p_low, bar_index, p_low, color=COLOR_SR_LEVEL, width=1, style=line.style_dashed)
+        array.push(sr_lines, new_supp)
+
+    // Draw Demand Zone Box (from Low of swing candle to the body or close of that candle)
+    if show_zones
+        float box_top = math.min(open[right_bars], close[right_bars])
+        box new_demand = box.new(bar_index - right_bars, box_top, bar_index, p_low, bgcolor=COLOR_DEMAND, border_color=COLOR_DEMAND, border_width=1)
+        array.push(zone_boxes, new_demand)
+
+// Extend recent active S/R lines and zone boxes to the current bar
+if barstate.islast
+    if array.size(sr_lines) > 0
+        for i = 0 to math.min(array.size(sr_lines) - 1, max_drawings - 1)
+            line.set_x2(array.get(sr_lines, array.size(sr_lines) - 1 - i), bar_index)
+    if array.size(zone_boxes) > 0
+        for i = 0 to math.min(array.size(zone_boxes) - 1, max_drawings - 1)
+            box.set_right(array.get(zone_boxes, array.size(zone_boxes) - 1 - i), bar_index)
+
+// Manage and clean up S/R lines and supply/demand boxes
+f_manage_drawings(sr_lines, zone_boxes, max_drawings)
+
+// Get last confirmed Swing High and Low for structural assessment
+float last_swing_high = array.size(list_swing_highs) > 0 ? array.get(list_swing_highs, array.size(list_swing_highs) - 1) : na
+int last_high_index   = array.size(list_swing_high_idx) > 0 ? array.get(list_swing_high_idx, array.size(list_swing_high_idx) - 1) : na
+float last_swing_low  = array.size(list_swing_lows) > 0 ? array.get(list_swing_lows, array.size(list_swing_lows) - 1) : na
+int last_low_index    = array.size(list_swing_low_idx) > 0 ? array.get(list_swing_low_idx, array.size(list_swing_low_idx) - 1) : na
+
+// Tracking Liquidity Sweeps
+var bool bullish_sweep_detected = false
+var bool bearish_sweep_detected = false
+bullish_sweep_detected := false
+bearish_sweep_detected := false
+
+if not na(last_swing_low) and low < last_swing_low and close > last_swing_low
+    bullish_sweep_detected := true
+    if show_sweeps
+        line sweep_line = line.new(last_low_index, last_swing_low, bar_index, last_swing_low, color=COLOR_BULLISH, width=1, style=line.style_dotted)
+        label.new(bar_index, last_swing_low, "LQD SWEEP", color=COLOR_BULLISH, textcolor=COLOR_TEXT_DRK, size=size.small, style=label.style_label_up)
+        array.push(structure_lines, sweep_line)
+
+if not na(last_swing_high) and high > last_swing_high and close < last_swing_high
+    bearish_sweep_detected := true
+    if show_sweeps
+        line sweep_line = line.new(last_high_index, last_swing_high, bar_index, last_swing_high, color=COLOR_BEARISH, width=1, style=line.style_dotted)
+        label.new(bar_index, last_swing_high, "LQD SWEEP", color=COLOR_BEARISH, textcolor=COLOR_TEXT_LGT, size=size.small, style=label.style_label_down)
+        array.push(structure_lines, sweep_line)
+
+// Tracking Break of Structure (BOS) & Change of Character (CHoCH)
+var bool bos_occurred   = false
+var bool choch_occurred = false
+var string structure_label = ""
+
+bos_occurred   := false
+choch_occurred := false
+
+// Trigger structures only on complete candle close breach of the latest swing levels
+if not na(last_swing_high) and ta.crossover(close, last_swing_high)
+    if market_bias == "Bearish"
+        choch_occurred := true
+        market_bias := "Bullish"
+        structure_label := "CHoCH"
+        if show_bos_choch
+            line struct_l = line.new(last_high_index, last_swing_high, bar_index, last_swing_high, color=COLOR_BULLISH, width=2, style=line.style_solid)
+            label.new(bar_index, last_swing_high, "CHoCH (Bullish)", color=COLOR_BULLISH, textcolor=COLOR_TEXT_DRK, size=size.small, style=label.style_label_down)
+            array.push(structure_lines, struct_l)
+    else
+        bos_occurred := true
+        market_bias := "Bullish"
+        structure_label := "BOS"
+        if show_bos_choch
+            line struct_l = line.new(last_high_index, last_swing_high, bar_index, last_swing_high, color=COLOR_BULLISH, width=1, style=line.style_dashed)
+            label.new(bar_index, last_swing_high, "BOS (Bullish)", color=COLOR_BULLISH, textcolor=COLOR_TEXT_DRK, size=size.small, style=label.style_label_down)
+            array.push(structure_lines, struct_l)
+
+if not na(last_swing_low) and ta.crossunder(close, last_swing_low)
+    if market_bias == "Bullish"
+        choch_occurred := true
+        market_bias := "Bearish"
+        structure_label := "CHoCH"
+        if show_bos_choch
+            line struct_l = line.new(last_low_index, last_swing_low, bar_index, last_swing_low, color=COLOR_BEARISH, width=2, style=line.style_solid)
+            label.new(bar_index, last_swing_low, "CHoCH (Bearish)", color=COLOR_BEARISH, textcolor=COLOR_TEXT_LGT, size=size.small, style=label.style_label_up)
+            array.push(structure_lines, struct_l)
+    else
+        bos_occurred := true
+        market_bias := "Bearish"
+        structure_label := "BOS"
+        if show_bos_choch
+            line struct_l = line.new(last_low_index, last_swing_low, bar_index, last_swing_low, color=COLOR_BEARISH, width=1, style=line.style_dashed)
+            label.new(bar_index, last_swing_low, "BOS (Bearish)", color=COLOR_BEARISH, textcolor=COLOR_TEXT_LGT, size=size.small, style=label.style_label_up)
+            array.push(structure_lines, struct_l)
+
+// Maintain max limit of active structure lines
+if array.size(structure_lines) > max_drawings
+    line.delete(array.remove(structure_lines, 0))
+
+// =============================================================================
+// REWORKED MOMENTUM & SIGNALS ENGINES (MODULE 3)
+// =============================================================================
+// RSI Calculation
+rsi_val = ta.rsi(close, rsi_len)
+
+// MACD Calculation
+[macd_val, macd_sig, macd_hist] = ta.macd(close, macd_fast, macd_slow, macd_signal)
+
+// Volume Confirmation Calculation
+vol_ma = ta.sma(volume, vol_ma_len)
+bool vol_confirmed = volume > (vol_ma * vol_multiplier)
+
+// REWORKED 1-MIN SCALPING confluences for absolute precision:
+// For BUY:
+// - RSI must be in a bullish posture (> 50) and rising, or crossing over 50.
+// - MACD line must be above its Signal line AND the MACD Histogram must be positive and rising to capture bullish velocity.
+bool reworked_mom_buy = (rsi_val > 50.0 and rsi_val > rsi_val[1]) and (macd_val > macd_sig and macd_hist > 0.0 and macd_hist > macd_hist[1])
+
+// For SELL:
+// - RSI must be in a bearish posture (< 50) and falling, or crossing under 50.
+// - MACD line must be below its Signal line AND the MACD Histogram must be negative and falling to capture bearish velocity.
+bool reworked_mom_sell = (rsi_val < 50.0 and rsi_val < rsi_val[1]) and (macd_val < macd_sig and macd_hist < 0.0 and macd_hist < macd_hist[1])
+
+// =============================================================================
+// AI CONFIRMATION ENGINE (MODULE 4)
+// =============================================================================
+// 1. ATR (Volatility check)
+atr_val = ta.atr(14)
+atr_ma  = ta.sma(atr_val, 20)
+
+// 2. Higher Timeframe Confirmation (Non-Repainting with strict delay [1])
+htf_close = request.security(syminfo.tickerid, htf_tf, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+htf_ema   = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 50)[1], barmerge.gaps_off, barmerge.lookahead_off)
+bool htf_bullish = htf_close > htf_ema
+
+// 3. AI Filter Conditions (To Ignore/Filter out Bad Market Environments)
+bool is_low_volume      = volume < vol_ma * 0.8
+bool is_low_atr         = atr_val < atr_ma * 0.8
+bool is_sideways_market = adx_val < adx_thres
+bool is_weak_momentum   = rsi_val >= 48.0 and rsi_val <= 52.0
+
+// 4. Calculate AI Confidence Score (0-100%) dynamically
+float ai_score_buy = 0.0
+float ai_score_sell = 0.0
+
+// Trend Score mapping (Max 25%)
+float ai_trend_weight = (trend_score / 100.0) * 25.0
+ai_score_buy  += ai_trend_weight
+ai_score_sell += (25.0 - ai_trend_weight)
+
+// Momentum mapping (RSI & MACD - Max 25%)
+float ai_mom_buy = 0.0
+float ai_mom_sell = 0.0
+if rsi_val > 50.0
+    ai_mom_buy += 10.0
+else
+    ai_mom_sell += 10.0
+if macd_val > macd_sig
+    ai_mom_buy += 15.0
+else
+    ai_mom_sell += 15.0
+ai_score_buy  += ai_mom_buy
+ai_score_sell += ai_mom_sell
+
+// Volume mapping (Max 15%)
+float ai_vol_score = vol_confirmed ? 15.0 : 5.0
+ai_score_buy  += ai_vol_score
+ai_score_sell += ai_vol_score
+
+// ATR Volatility mapping (Max 15%)
+float ai_atr_score = (atr_val > atr_ma) ? 15.0 : 5.0
+ai_score_buy  += ai_atr_score
+ai_score_sell += ai_atr_score
+
+// VWAP mapping (Max 10%)
+if close > vwap_val
+    ai_score_buy  += 10.0
+else
+    ai_score_sell += 10.0
+
+// HTF mapping (Max 5%)
+if htf_bullish
+    ai_score_buy  += 5.0
+else
+    ai_score_sell += 5.0
+
+// Market Structure SMC mapping (Max 5%)
+if market_bias == "Bullish"
+    ai_score_buy  += 5.0
+else if market_bias == "Bearish"
+    ai_score_sell += 5.0
+
+// Active AI score tracking based on candle close
+float active_ai_score = 0.0
+
+// Raw Signal Confluences on closed bar [1] integrating our supercharged reworked momentum confluences:
+bool raw_buy = (trend_score[1] >= 60.0 or close[1] > ema50[1]) and (close[1] > vwap_val[1]) and reworked_mom_buy[1] and (not is_low_volume[1]) and (not is_low_atr[1]) and (not is_sideways_market[1]) and (not is_weak_momentum[1]) and htf_bullish[1] and (ai_score_buy[1] >= ai_confidence_th)
+bool raw_sell = (trend_score[1] <= 40.0 or close[1] < ema50[1]) and (close[1] < vwap_val[1]) and reworked_mom_sell[1] and (not is_low_volume[1]) and (not is_low_atr[1]) and (not is_sideways_market[1]) and (not is_weak_momentum[1]) and (not htf_bullish[1]) and (ai_score_sell[1] >= ai_confidence_th)
+
+// Record active confidence to display in table
+if barstate.islast
+    active_ai_score := market_bias == "Bullish" ? ai_score_buy : market_bias == "Bearish" ? ai_score_sell : (ai_score_buy + ai_score_sell) / 2.0
+
+// State management to guarantee NO duplicate signals in a row
+var int signal_state = 0 // 1 = Last was BUY, -1 = Last was SELL
+bool trigger_buy = false
+bool trigger_sell = false
+
+if raw_buy and signal_state != 1
+    trigger_buy := true
+    signal_state := 1
+
+if raw_sell and signal_state != -1
+    trigger_sell := true
+    signal_state := -1
+
+// Determine signal strength
+bool trigger_strong_buy  = trigger_buy  and ai_score_buy[1] >= 90.0
+bool trigger_strong_sell = trigger_sell and ai_score_sell[1] >= 90.0
+
+// =============================================================================
+// ALERT CONDITIONS (MODULE 5)
+// =============================================================================
+// Trend Change Detect
+bool trend_changed = ta.change(st_bullish) or ta.change(trend_score >= 50.0)
+
+// S/R Breaks Detect (Close cross-over/under historical lines)
+bool support_broken = not na(last_swing_low) and ta.crossunder(close, last_swing_low)
+bool resistance_broken = not na(last_swing_high) and ta.crossover(close, last_swing_high)
+
+// Register standard alerts
+alertcondition(trigger_buy,  title="Institutional BUY Alert",        message="Institutional BUY Signal Triggered on Close! Confidence: {{plot(\"AI Score Buy\")}}%")
+alertcondition(trigger_sell, title="Institutional SELL Alert",       message="Institutional SELL Signal Triggered on Close! Confidence: {{plot(\"AI Score Sell\")}}%")
+alertcondition(trigger_strong_buy,  title="Strong BUY Alert",        message="HIGH-CONVICTION Institutional BUY! Confidence: {{plot(\"AI Score Buy\")}}%")
+alertcondition(trigger_strong_sell, title="Strong SELL Alert",       message="HIGH-CONVICTION Institutional SELL! Confidence: {{plot(\"AI Score Sell\")}}%")
+alertcondition(trend_changed,       title="Overall Trend Flip Alert", message="Market Trend Direction Has Changed!")
+alertcondition(support_broken,      title="Support Line Broken Alert",message="Price Closed Below Historical Support Level!")
+alertcondition(resistance_broken,   title="Resistance Broken Alert",  message="Price Closed Above Historical Resistance Level!")
+
+// We must plot the scores as series so alert condition message can access them via {{plot(...)}}
+plot(ai_score_buy,  "AI Score Buy",  color=color.new(color.white, 100), display=display.none)
+plot(ai_score_sell, "AI Score Sell", color=color.new(color.yellow, 100), display=display.none)
+
+// =============================================================================
+// PLOTS AND VISUALIZATIONS
+// =============================================================================
+plot(show_ema20 ? ema20 : na, "EMA 20", color=color.new(color_ema20, 15), linewidth=1)
+plot(show_ema50 ? ema50 : na, "EMA 50", color=color.new(color_ema50, 10), linewidth=2)
+plot(show_ema200 ? ema200 : na, "EMA 200", color=color.new(color_ema200, 5), linewidth=3)
+plot(show_vwap ? vwap_val : na, "VWAP", color=color.new(color_vwap, 20), linewidth=1, style=plot.style_dashed)
+plot(show_kama ? kama_val : na, "KAMA", color=color.new(color_kama, 10), linewidth=2)
+
+// SuperTrend Plot (Dynamic line coloring on trend direction)
+plot(show_st ? st_val : na, "SuperTrend", color=st_bullish ? color.new(COLOR_BULLISH, 0) : color.new(COLOR_BEARISH, 0), linewidth=2)
+
+// Plot Buy/Sell signals (Arrows) on completed candle close
+// Using offset=-1 to match the bar index [1] where signal confluence occurred
+plotshape(show_signals and trigger_buy ? true : false, title="AI Confirmed BUY Arrow", style=shape.arrowup, location=location.belowbar, color=color.white, size=size.normal, offset=-1)
+plotshape(show_signals and trigger_sell ? true : false, title="AI Confirmed SELL Arrow", style=shape.arrowdown, location=location.abovebar, color=color.yellow, size=size.normal, offset=-1)
+
+// =============================================================================
+// PREMIUM FLOATING DASHBOARD (TABLE - MODULE 5)
+// =============================================================================
+var table info_table = na
+
+if show_dash and barstate.islast
+    // Premium 14 Rows x 2 Columns Dashboard Table
+    if na(info_table)
+        info_table := table.new(f_get_position(dash_pos), 2, 14, bgcolor=COLOR_DARK_BG, border_color=COLOR_MIXED, border_width=1)
+
+    t_size = f_get_text_size(dash_size)
+
+    // Header
+    table.cell(info_table, 0, 0, "INSTITUTIONAL AI SUITE v5", text_color=COLOR_TEXT_LGT, text_size=t_size, bgcolor=COLOR_MIXED, text_valign=text.valign_middle)
+    table.merge_cells(info_table, 0, 0, 1, 0)
+
+    // Row 1: Current Trend Status
+    table.cell(info_table, 0, 1, "Current Trend", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    curr_trend_str = st_bullish ? "Bullish (Supertrend)" : "Bearish (Supertrend)"
+    curr_trend_color = st_bullish ? COLOR_BULLISH : COLOR_BEARISH
+    table.cell(info_table, 1, 1, curr_trend_str, bgcolor=curr_trend_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
+
+    // Row 2: EMA Status
+    table.cell(info_table, 0, 2, "EMA Ribbon", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    ema_status_str = (ema20 > ema50 and ema50 > ema200) ? "Bullish Alignment" : (ema20 < ema50 and ema50 < ema200) ? "Bearish Alignment" : "Neutral / Mixed"
+    ema_status_color = (ema20 > ema50 and ema50 > ema200) ? COLOR_BULLISH : (ema20 < ema50 and ema50 < ema200) ? COLOR_BEARISH : COLOR_NEUTRAL
+    table.cell(info_table, 1, 2, ema_status_str, bgcolor=ema_status_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
+
+    // Row 3: Momentum Status
+    table.cell(info_table, 0, 3, "Momentum (RSI)", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    mom_str = (rsi_val > 55.0) ? "Bullish Momentum" : (rsi_val < 45.0) ? "Bearish Momentum" : "Consolidating"
+    mom_color = (rsi_val > 55.0) ? COLOR_BULLISH : (rsi_val < 45.0) ? COLOR_BEARISH : COLOR_NEUTRAL
+    table.cell(info_table, 1, 3, mom_str + " (" + str.tostring(rsi_val, "0.0") + ")", bgcolor=mom_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
+
+    // Row 4: Volume confirmation
+    table.cell(info_table, 0, 4, "Volume Confirmation", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    vol_str = vol_confirmed ? "Confirmed High" : "Low Volume"
+    vol_color = vol_confirmed ? COLOR_BULLISH : COLOR_MIXED
+    table.cell(info_table, 1, 4, vol_str, bgcolor=vol_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
+
+    // Row 5: ATR range state
+    table.cell(info_table, 0, 5, "ATR Volatility", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    atr_str = (atr_val > atr_ma) ? "Expanding Vol" : "Compressing Vol"
+    atr_color = (atr_val > atr_ma) ? COLOR_BULLISH : COLOR_MIXED
+    table.cell(info_table, 1, 5, atr_str, bgcolor=atr_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
+
+    // Row 6: ADX status
+    table.cell(info_table, 0, 6, "Trend Strength (ADX)", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    adx_str = (adx_val > adx_thres) ? "Strongly Trending" : "Sideways Market"
+    adx_color = (adx_val > adx_thres) ? COLOR_BULLISH : COLOR_BEARISH
+    table.cell(info_table, 1, 6, adx_str + " (" + str.tostring(adx_val, "0.0") + ")", bgcolor=adx_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
+
+    // Row 7: VWAP Trend Status
+    table.cell(info_table, 0, 7, "VWAP Line", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    vwap_status_str = (close > vwap_val) ? "Bullish (Above)" : "Bearish (Below)"
+    vwap_status_color = (close > vwap_val) ? COLOR_BULLISH : COLOR_BEARISH
+    table.cell(info_table, 1, 7, vwap_status_str, bgcolor=vwap_status_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
+
+    // Row 8: Market Structure Bias
+    table.cell(info_table, 0, 8, "SMC Market Bias", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    bias_color = market_bias == "Bullish" ? COLOR_BULLISH : market_bias == "Bearish" ? COLOR_BEARISH : COLOR_NEUTRAL
+    table.cell(info_table, 1, 8, market_bias, bgcolor=bias_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
+
+    // Row 9: AI Score value
+    table.cell(info_table, 0, 9, "AI Score Confidence", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    ai_status_color = active_ai_score >= 85.0 ? COLOR_BULLISH : active_ai_score >= 70.0 ? COLOR_NEUTRAL : COLOR_MIXED
+    table.cell(info_table, 1, 9, str.tostring(active_ai_score, "0.0") + "%", bgcolor=ai_status_color, text_color=COLOR_TEXT_DRK, text_size=t_size)
+
+    // Row 10: Signal Strength
+    table.cell(info_table, 0, 10, "Signal Strength", text_color=COLOR_TEXT_LGT, text_size=t_size, text_align=text.align_left)
+    sig_str = trigger_strong_buy ? "Strong BUY" : trigger_strong_sell ? "Strong SELL" : trigger_buy ? "Standard BUY" : trigger_sell ? "Standard SELL" : "Searching..."
+    sig_color = (trigger_strong_buy or trigger_buy) ? COLOR_BULLISH : (trigger_strong_sell or trigger_sell) ? COLOR_BEARISH : COLOR_DARK_BG
+    sig_text_color = (trigger_strong_buy or trigger_buy or trigger_strong_sell or trigger_sell) ? COLOR_TEXT_DRK : COLOR_TEXT_LGT
+    table.cell(info_table, 1, 10, sig_str, bgcolor=sig_color, text_color=sig_text_color, text_size=t_size)
+
+    // Row 12: Trend Score Header
+    table.cell(info_table, 0, 11, "OVERALL TREND SCORE", text_color=COLOR_TEXT_LGT, text_size=t_size, bgcolor=COLOR_DARK_BG)
+    table.merge_cells(info_table, 0, 11, 1, 11)
+
+    // Row 13: Trend Score Value
+    table.cell(info_table, 0, 12, str.tostring(trend_score, "0") + " / 100", text_color=COLOR_TEXT_DRK, text_size=size.large, bgcolor=f_get_score_color(trend_score))
+    table.merge_cells(info_table, 0, 12, 1, 12)
